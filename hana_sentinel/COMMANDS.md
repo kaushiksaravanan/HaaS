@@ -150,9 +150,9 @@ gcloud app services list
 gcloud app versions list
 ```
 
-### SSH into App Engine Instance
+### Connect to App Engine Instance
 ```bash
-gcloud app instances ssh [INSTANCE_ID]
+gcloud app instances list
 ```
 
 ### View Environment Variables
@@ -266,7 +266,6 @@ Add these to your shell profile:
 alias hana-dev="cd /path/to/hana_sentinel && ./dev.sh"
 alias hana-deploy="cd /path/to/hana_sentinel && ./deploy_frontend.sh"
 alias hana-logs="gcloud app logs tail -s default"
-alias hana-ssh="gcloud app instances ssh \$(gcloud app instances list --format='value(id)' | head -n1)"
 ```
 
 ```powershell

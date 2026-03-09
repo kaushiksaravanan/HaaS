@@ -46,7 +46,6 @@ htmlcov/
 *.sh
 !deploy.sh
 verify.py
-check_remote_gcloud.py
 test_*.py
 
 # Config

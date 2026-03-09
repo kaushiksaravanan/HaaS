@@ -93,20 +93,20 @@ export default function Dashboard() {
               <h1 className="font-serif text-3xl font-semibold text-foreground tracking-tight">
                 HANA Sentinel
               </h1>
-              <p className="text-muted-foreground mt-2 flex items-center gap-3">
+              <div className="text-muted-foreground mt-2 flex items-center gap-3">
                 <span>AI-Powered Operations Platform</span>
                 <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-lg text-xs font-semibold ${
                   healthStatus.color === 'success' ? 'bg-success-50 text-success-600 border border-success-500/20' :
                   healthStatus.color === 'warning' ? 'bg-warning-50 text-warning-600 border border-warning-500/20' :
                   'bg-danger-50 text-danger-600 border border-danger-500/20'
                 }`}>
-                  <div className={`w-2 h-2 rounded-full animate-pulse ${
+                  <span className={`w-2 h-2 rounded-full animate-pulse ${
                     healthStatus.color === 'success' ? 'bg-success-500' :
                     healthStatus.color === 'warning' ? 'bg-warning-500' : 'bg-danger-500'
-                  }`}></div>
+                  }`}></span>
                   {healthStatus.label}
                 </span>
-              </p>
+              </div>
             </div>
           </div>
         </div>

@@ -15,6 +15,7 @@ Usage:
 """
 
 import os
+import signal
 import subprocess
 import logging
 import json
@@ -22,6 +23,7 @@ import shlex
 import re
 import glob
 import asyncio
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -31,12 +33,56 @@ from pydantic import BaseModel
 import uvicorn
 
 # Thread pool for running blocking I/O without freezing the async event loop
-_executor = ThreadPoolExecutor(max_workers=8)
+# Use more workers so a few stuck threads don't block the entire server
+_executor = ThreadPoolExecutor(max_workers=32)
 
-async def _to_thread(func, *args, **kwargs):
-    """Run a blocking function in the thread pool."""
+# Track active threads for health monitoring
+_active_threads: Dict[int, Dict[str, Any]] = {}
+_thread_lock = threading.Lock()
+
+def _track_thread_start(description: str):
+    """Register a thread as active for health monitoring."""
+    tid = threading.current_thread().ident
+    with _thread_lock:
+        _active_threads[tid] = {
+            "description": description,
+            "started_at": datetime.now().isoformat(),
+            "started_ts": datetime.now().timestamp(),
+        }
+
+def _track_thread_end():
+    """Unregister a thread when it completes."""
+    tid = threading.current_thread().ident
+    with _thread_lock:
+        _active_threads.pop(tid, None)
+
+
+async def _to_thread(func, *args, _timeout: int = 120, _description: str = "", **kwargs):
+    """Run a blocking function in the thread pool with an async timeout.
+
+    If the thread doesn't finish in _timeout seconds, the await is cancelled
+    and an error is returned so the endpoint doesn't hang forever.
+    """
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(_executor, lambda: func(*args, **kwargs))
+
+    def _wrapper():
+        _track_thread_start(_description or func.__name__)
+        try:
+            return func(*args, **kwargs)
+        finally:
+            _track_thread_end()
+
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(_executor, _wrapper),
+            timeout=_timeout,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"Thread timed out after {_timeout}s: {_description or func.__name__}")
+        raise HTTPException(
+            status_code=504,
+            detail=f"Operation timed out after {_timeout}s"
+        )
 
 # Configure logging
 logging.basicConfig(
@@ -144,78 +190,62 @@ class CommandResponse(BaseModel):
 # Diagnostic Functions (Pure Python)
 # ============================================================================
 
+def _run_subprocess_safe(args, timeout: int = 30, shell: bool = False, cwd: str = None) -> Dict[str, Any]:
+    """
+    Run a subprocess with RELIABLE timeout enforcement.
+
+    Uses start_new_session=True + os.killpg to kill the entire process group
+    (including child processes spawned by sudo/bash). This prevents zombie
+    processes from permanently consuming thread pool workers.
+    """
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            shell=shell,
+            cwd=cwd,
+            start_new_session=True,  # Create new process group for reliable killing
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+            return {
+                "status": "success" if proc.returncode == 0 else "error",
+                "exit_code": proc.returncode,
+                "output": stdout.strip() if stdout else "",
+                "error": stderr.strip() if stderr else None,
+            }
+        except subprocess.TimeoutExpired:
+            # Kill the ENTIRE process group (sudo + all children)
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                proc.kill()  # Fallback: kill just the direct process
+            proc.wait(timeout=5)  # Reap the zombie
+            logger.warning(f"Killed timed-out process group (pgid={proc.pid}) after {timeout}s")
+            return {"status": "error", "error": f"Command timeout after {timeout}s (process killed)"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 def run_as_hana_user(command: List[str], timeout: int = 30) -> Dict[str, Any]:
     """
     Execute command as HANA admin user (zo3adm).
 
-    HANA commands (sapcontrol, HDB, hdbsql, hdbuserstore) require:
-    - Execution as zo3adm user
-    - HANA environment variables (PATH, HANA_HOME, etc.)
-
-    Args:
-        command: Command as list of arguments
-        timeout: Command timeout in seconds
-
-    Returns:
-        dict with status, output, error
+    Uses process-group killing to ensure timeouts reliably terminate
+    sudo + all child processes.
     """
-    try:
-        # Build command to run as HANA user with proper environment
-        # sudo -i -u zo3adm ensures the user's full login environment is loaded
-        full_command = ["sudo", "-i", "-u", Config.HANA_USER] + command
-
-        result = subprocess.run(
-            full_command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-            timeout=timeout
-        )
-        return {
-            "status": "success" if result.returncode == 0 else "error",
-            "exit_code": result.returncode,
-            "output": result.stdout.strip(),
-            "error": result.stderr.strip() if result.stderr else None
-        }
-    except subprocess.TimeoutExpired:
-        return {"status": "error", "error": f"Command timeout after {timeout}s"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    full_command = ["sudo", "-i", "-u", Config.HANA_USER] + command
+    return _run_subprocess_safe(full_command, timeout=timeout)
 
 
 def run_shell_as_hana_user(command: str, timeout: int = 30) -> Dict[str, Any]:
     """
     Execute shell command as HANA admin user (zo3adm).
-
-    Args:
-        command: Shell command string
-        timeout: Command timeout in seconds
-
-    Returns:
-        dict with status, output, error
     """
-    try:
-        # Run shell command as HANA user (shlex.quote prevents shell injection)
-        full_command = f"sudo -i -u {shlex.quote(Config.HANA_USER)} bash -c {shlex.quote(command)}"
-
-        result = subprocess.run(
-            full_command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-            timeout=timeout
-        )
-        return {
-            "status": "success" if result.returncode == 0 else "error",
-            "exit_code": result.returncode,
-            "output": result.stdout.strip(),
-            "error": result.stderr.strip() if result.stderr else None
-        }
-    except subprocess.TimeoutExpired:
-        return {"status": "error", "error": f"Command timeout after {timeout}s"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+    full_command = f"sudo -i -u {shlex.quote(Config.HANA_USER)} bash -c {shlex.quote(command)}"
+    return _run_subprocess_safe(full_command, timeout=timeout, shell=True)
 
 
 def check_hana_processes() -> Dict[str, Any]:
@@ -465,23 +495,21 @@ def run_hdbsql(sql: str, timeout: int = 30) -> Dict[str, Any]:
     Returns:
         dict with status, columns, rows, row_count
     """
-    # Use hdbsql with userstore key, column separator for parsing
-    # -C: suppress "X rows selected" footer
-    # -a: aligned output
-    # -j: use | as column separator for reliable parsing
-    # NOTE: Do NOT use -x (suppress headers) — parser needs header line for column names
+    # Use hdbsql with userstore key, comma-separated output for parsing
+    # No -a flag (it suppresses column headers which the parser needs)
+    # -C: suppress page separator
     # Escape shell-sensitive characters in SQL to prevent injection
     safe_sql = sql.replace('\\', '\\\\').replace('"', '\\"').replace('`', '\\`').replace('$', '\\$')
     hdbsql_cmd = (
-        f'hdbsql -U SYSTEM -j -a -C "{safe_sql}"'
+        f'hdbsql -U SYSTEM "{safe_sql}"'
     )
 
     result = run_shell_as_hana_user(hdbsql_cmd, timeout=timeout)
 
     if result.get("status") != "success" or not result.get("output"):
-        # Try with instance-specific connection as fallback
+        # Try with SYSTEMDB userstore key as fallback (connects to port 30213)
         hdbsql_cmd_fallback = (
-            f'hdbsql -i {Config.HANA_INSTANCE_NR} -d SYSTEMDB -u SYSTEM -n localhost:3{Config.HANA_INSTANCE_NR}13 -j -a -C "{safe_sql}"'
+            f'hdbsql -U SYSTEMDB "{safe_sql}"'
         )
         result = run_shell_as_hana_user(hdbsql_cmd_fallback, timeout=timeout)
 
@@ -496,24 +524,31 @@ def run_hdbsql(sql: str, timeout: int = 30) -> Dict[str, Any]:
     if not output:
         return {"status": "success", "columns": [], "rows": [], "row_count": 0}
 
-    # Parse pipe-separated output
+    # Parse comma-separated output (hdbsql default format)
+    # Format: "COL1,COL2\nval1,val2\nN rows selected (overall time ...)"
     lines = output.split("\n")
     rows = []
     columns = []
+    header_found = False
 
-    for i, line in enumerate(lines):
+    for line in lines:
         line = line.strip()
         if not line:
             continue
 
-        # Split by | separator
-        parts = [p.strip() for p in line.split("|")]
+        # Skip footer lines like "N rows selected (overall time ...)"
+        if "row selected" in line.lower() or "rows selected" in line.lower():
+            continue
 
-        if i == 0:
-            # First line is column headers
+        # Split by comma separator
+        parts = [p.strip() for p in line.split(",")]
+
+        if not header_found:
+            # First non-empty, non-footer line is column headers
             columns = [p.upper() for p in parts if p]
+            header_found = True
         else:
-            if len(parts) >= len(columns) and columns:
+            if columns and len(parts) >= len(columns):
                 row = {}
                 for j, col in enumerate(columns):
                     val = parts[j] if j < len(parts) else ""
@@ -552,13 +587,17 @@ def get_hana_realtime_metrics() -> Dict[str, Any]:
         "active_threads": None,
     }
 
-    # CPU + Memory from M_HOST_RESOURCE_UTILIZATION
+    # CPU from latest statistics delta, memory from current utilization
     try:
         result = run_hdbsql(
             "SELECT TOP 1 "
-            "ROUND(CPU_USER_PERCENT + CPU_SYSTEM_PERCENT, 1) AS CPU_USAGE, "
-            "ROUND(USED_PHYSICAL_MEMORY * 100.0 / TOTAL_PHYSICAL_MEMORY, 1) AS MEMORY_USAGE "
-            "FROM M_HOST_RESOURCE_UTILIZATION ORDER BY TIMESTAMP DESC"
+            "ROUND(100.0 * (TOTAL_CPU_USER_TIME_DELTA + TOTAL_CPU_SYSTEM_TIME_DELTA) "
+            "/ NULLIF(TOTAL_CPU_USER_TIME_DELTA + TOTAL_CPU_SYSTEM_TIME_DELTA "
+            "+ TOTAL_CPU_WIO_TIME_DELTA + TOTAL_CPU_IDLE_TIME_DELTA, 0), 1) AS CPU_USAGE, "
+            "ROUND(USED_PHYSICAL_MEMORY * 100.0 "
+            "/ NULLIF(USED_PHYSICAL_MEMORY + FREE_PHYSICAL_MEMORY, 0), 1) AS MEMORY_USAGE "
+            "FROM _SYS_STATISTICS.HOST_RESOURCE_UTILIZATION_STATISTICS "
+            "ORDER BY SERVER_TIMESTAMP DESC"
         )
         if result.get("rows"):
             metrics["cpu_usage"] = result["rows"][0].get("CPU_USAGE")
@@ -586,10 +625,10 @@ def get_hana_realtime_metrics() -> Dict[str, Any]:
     except Exception:
         pass
 
-    # TPS from M_WORKLOAD
+    # TPS from M_WORKLOAD (current rate)
     try:
         result = run_hdbsql(
-            "SELECT ROUND(SUM(TRANSACTION_COUNT) / GREATEST(SUM(ELAPSED_TIME) / 1000000.0, 1), 0) AS TPS "
+            "SELECT ROUND(SUM(CURRENT_TRANSACTION_RATE), 0) AS TPS "
             "FROM M_WORKLOAD"
         )
         if result.get("rows"):
@@ -607,11 +646,12 @@ def get_hana_realtime_metrics() -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Cache hit ratio
+    # Cache hit ratio from SQL plan cache
     try:
         result = run_hdbsql(
-            "SELECT ROUND(SUM(HIT_COUNT) * 100.0 / NULLIF(SUM(HIT_COUNT + MISS_COUNT), 0), 1) AS RATIO "
-            "FROM M_CACHE_ENTRIES"
+            "SELECT ROUND(SUM(TO_BIGINT(EXECUTION_COUNT) - TO_BIGINT(PREPARATION_COUNT)) * 100.0 "
+            "/ NULLIF(SUM(TO_BIGINT(EXECUTION_COUNT)), 0), 1) AS RATIO "
+            "FROM M_SQL_PLAN_CACHE"
         )
         if result.get("rows"):
             metrics["cache_hit_ratio"] = result["rows"][0].get("RATIO")
@@ -691,7 +731,6 @@ def get_expensive_queries(top_n: int = 10) -> List[Dict[str, Any]]:
         f"SELECT TOP {top_n} "
         "SUBSTR(STATEMENT_STRING, 1, 200) AS SQL_TEXT, "
         "ROUND(DURATION_MICROSEC / 1000000.0, 2) AS DURATION_SEC, "
-        "EXECUTION_COUNT, "
         "ROUND(CPU_TIME / 1000000.0, 2) AS CPU_SEC, "
         "ROUND(LOCK_WAIT_DURATION / 1000000.0, 2) AS LOCK_WAIT_SEC "
         "FROM M_EXPENSIVE_STATEMENTS "
@@ -704,7 +743,6 @@ def get_expensive_queries(top_n: int = 10) -> List[Dict[str, Any]]:
                 "rank": idx,
                 "sql": row.get("SQL_TEXT", ""),
                 "duration_sec": row.get("DURATION_SEC", 0),
-                "executions": row.get("EXECUTION_COUNT", 0),
                 "cpu_sec": row.get("CPU_SEC", 0),
                 "lock_wait_sec": row.get("LOCK_WAIT_SEC", 0),
             })
@@ -820,12 +858,15 @@ def get_database_info() -> Dict[str, Any]:
 def get_metrics_history(hours: int = 12) -> List[Dict[str, Any]]:
     """Get historical CPU/memory metrics from M_HOST_RESOURCE_UTILIZATION_STATISTICS."""
     result = run_hdbsql(
-        f"SELECT TIMESTAMP, "
-        f"ROUND(CPU_USER_PERCENT + CPU_SYSTEM_PERCENT, 1) AS CPU_USAGE, "
-        f"ROUND(USED_PHYSICAL_MEMORY * 100.0 / TOTAL_PHYSICAL_MEMORY, 1) AS MEMORY_USAGE "
-        f"FROM M_HOST_RESOURCE_UTILIZATION_STATISTICS "
-        f"WHERE TIMESTAMP > ADD_SECONDS(CURRENT_TIMESTAMP, -{hours * 3600}) "
-        f"ORDER BY TIMESTAMP ASC"
+        f"SELECT SERVER_TIMESTAMP AS TIMESTAMP, "
+        f"ROUND(100.0 * (TOTAL_CPU_USER_TIME_DELTA + TOTAL_CPU_SYSTEM_TIME_DELTA) "
+        f"/ NULLIF(TOTAL_CPU_USER_TIME_DELTA + TOTAL_CPU_SYSTEM_TIME_DELTA "
+        f"+ TOTAL_CPU_WIO_TIME_DELTA + TOTAL_CPU_IDLE_TIME_DELTA, 0), 1) AS CPU_USAGE, "
+        f"ROUND(USED_PHYSICAL_MEMORY * 100.0 "
+        f"/ NULLIF(USED_PHYSICAL_MEMORY + FREE_PHYSICAL_MEMORY, 0), 1) AS MEMORY_USAGE "
+        f"FROM _SYS_STATISTICS.HOST_RESOURCE_UTILIZATION_STATISTICS "
+        f"WHERE SERVER_TIMESTAMP > ADD_SECONDS(CURRENT_TIMESTAMP, -{hours * 3600}) "
+        f"ORDER BY SERVER_TIMESTAMP ASC"
     )
     if result.get("status") == "success":
         history = []
@@ -879,15 +920,66 @@ async def root():
 
 @app.get("/health")
 async def health_check(x_api_key: str = Header(None)):
-    """Authenticated health check"""
+    """Authenticated health check with thread pool status"""
     verify_api_key(x_api_key)
 
+    # Thread pool health info
+    now_ts = datetime.now().timestamp()
+    with _thread_lock:
+        active_count = len(_active_threads)
+        stuck_threads = [
+            {**info, "stuck_seconds": int(now_ts - info["started_ts"])}
+            for info in _active_threads.values()
+            if now_ts - info["started_ts"] > 120  # stuck > 2 min
+        ]
+
+    pool_status = "healthy"
+    if len(stuck_threads) > 0:
+        pool_status = "degraded"
+    if active_count >= 28:  # near exhaustion (32 max)
+        pool_status = "critical"
+
     return {
-        "status": "healthy",
+        "status": "healthy" if pool_status == "healthy" else "degraded",
         "hostname": os.uname().nodename,
         "user": os.getenv("USER", "unknown"),
         "hana_sid": Config.HANA_SID,
+        "thread_pool": {
+            "status": pool_status,
+            "max_workers": 32,
+            "active_workers": active_count,
+            "stuck_threads": len(stuck_threads),
+        },
         "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/thread-pool/status")
+async def thread_pool_status(x_api_key: str = Header(None)):
+    """
+    Detailed thread pool diagnostics — shows all active workers
+    and identifies stuck threads. No thread pool worker needed (pure async).
+    """
+    verify_api_key(x_api_key)
+
+    now_ts = datetime.now().timestamp()
+    with _thread_lock:
+        threads_info = []
+        for tid, info in _active_threads.items():
+            elapsed = int(now_ts - info["started_ts"])
+            threads_info.append({
+                "thread_id": tid,
+                "description": info["description"],
+                "started_at": info["started_at"],
+                "elapsed_seconds": elapsed,
+                "stuck": elapsed > 120,
+            })
+
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "max_workers": 32,
+        "active_workers": len(threads_info),
+        "stuck_count": sum(1 for t in threads_info if t["stuck"]),
+        "threads": sorted(threads_info, key=lambda t: t["elapsed_seconds"], reverse=True),
     }
 
 @app.get("/node/info")
@@ -979,7 +1071,7 @@ async def get_node_info(x_api_key: str = Header(None)):
 
         return uname, cpu_count, cpu_model, total_mem_gb, hana_disks, disk_mounts, interfaces
 
-    uname, cpu_count, cpu_model, total_mem_gb, hana_disks, disk_mounts, interfaces = await _to_thread(_gather_node_info)
+    uname, cpu_count, cpu_model, total_mem_gb, hana_disks, disk_mounts, interfaces = await _to_thread(_gather_node_info, _timeout=30, _description="node_info")
 
     return {
         "node_type": "hana_compute_instance",
@@ -1155,7 +1247,7 @@ async def run_diagnostics(x_api_key: str = Header(None)):
             "backups": check_backups()
         }
 
-    results = await _to_thread(_run_all_checks)
+    results = await _to_thread(_run_all_checks, _timeout=180, _description="diagnostics_all")
 
     return {
         "timestamp": datetime.now().isoformat(),
@@ -1185,7 +1277,7 @@ async def get_diagnostics_summary(x_api_key: str = Header(None)):
                 summary["overall_status"] = "unhealthy"
         return summary
 
-    summary = await _to_thread(_run_summary_checks)
+    summary = await _to_thread(_run_summary_checks, _timeout=90, _description="diagnostics_summary")
     summary["timestamp"] = datetime.now().isoformat()
     return summary
 
@@ -1216,7 +1308,7 @@ async def get_system_health(x_api_key: str = Header(None)):
         sys_params = check_system_parameters()
         return cpu_usage, memory, disk, sys_params
 
-    cpu_usage, memory, disk, sys_params = await _to_thread(_gather_health)
+    cpu_usage, memory, disk, sys_params = await _to_thread(_gather_health, _timeout=30, _description="system_health")
 
     return {
         "timestamp": datetime.now().isoformat(),
@@ -1263,7 +1355,7 @@ async def get_resource_utilization(x_api_key: str = Header(None)):
             io_stats = "error"
         return loadavg, meminfo, io_stats
 
-    loadavg, meminfo, io_stats = await _to_thread(_gather_utilization)
+    loadavg, meminfo, io_stats = await _to_thread(_gather_utilization, _timeout=30, _description="resource_utilization")
 
     return {
         "timestamp": datetime.now().isoformat(),
@@ -1297,7 +1389,7 @@ async def get_growth_analysis(x_api_key: str = Header(None)):
                     })
         return disk_summary, backup_status
 
-    disk_summary, backup_status = await _to_thread(_gather_growth)
+    disk_summary, backup_status = await _to_thread(_gather_growth, _timeout=30, _description="growth_analysis")
 
     return {
         "timestamp": datetime.now().isoformat(),
@@ -1313,7 +1405,7 @@ async def get_backup_status(x_api_key: str = Header(None)):
     """
     verify_api_key(x_api_key)
 
-    backup_info = await _to_thread(check_backups)
+    backup_info = await _to_thread(check_backups, _timeout=30, _description="backup_status")
 
     return {
         "timestamp": datetime.now().isoformat(),
@@ -1343,7 +1435,7 @@ async def get_version_info(x_api_key: str = Header(None)):
         sys_params = check_system_parameters()
         return hana_version, sys_params
 
-    hana_version, sys_params = await _to_thread(_gather_version)
+    hana_version, sys_params = await _to_thread(_gather_version, _timeout=30, _description="version_info")
 
     return {
         "timestamp": datetime.now().isoformat(),
@@ -1365,7 +1457,7 @@ async def hana_realtime_metrics(x_api_key: str = Header(None)):
     active transactions, blocking sessions, cache hit ratio.
     """
     verify_api_key(x_api_key)
-    metrics = await _to_thread(get_hana_realtime_metrics)
+    metrics = await _to_thread(get_hana_realtime_metrics, _timeout=90, _description="hana_metrics")
     return {
         "timestamp": datetime.now().isoformat(),
         "metrics": metrics
@@ -1377,7 +1469,7 @@ async def hana_metrics_history(x_api_key: str = Header(None), hours: int = 12):
     Historical CPU/memory metrics from M_HOST_RESOURCE_UTILIZATION_STATISTICS.
     """
     verify_api_key(x_api_key)
-    history = await _to_thread(get_metrics_history, min(hours, 168))  # cap at 7 days
+    history = await _to_thread(get_metrics_history, min(hours, 168), _timeout=90, _description="hana_metrics_history")  # cap at 7 days
     return {
         "timestamp": datetime.now().isoformat(),
         "period_hours": hours,
@@ -1392,7 +1484,7 @@ async def hana_services(x_api_key: str = Header(None)):
     Shows each service's name, status, port, memory usage, coordinator type.
     """
     verify_api_key(x_api_key)
-    services = await _to_thread(get_hana_services)
+    services = await _to_thread(get_hana_services, _timeout=60, _description="hana_services")
     return {
         "timestamp": datetime.now().isoformat(),
         "service_count": len(services),
@@ -1406,7 +1498,7 @@ async def hana_active_transactions(x_api_key: str = Header(None)):
     Joins M_TRANSACTIONS + M_CONNECTIONS + M_ACTIVE_STATEMENTS.
     """
     verify_api_key(x_api_key)
-    transactions = await _to_thread(get_active_transactions)
+    transactions = await _to_thread(get_active_transactions, _timeout=60, _description="hana_transactions")
     return {
         "timestamp": datetime.now().isoformat(),
         "active_count": len(transactions),
@@ -1420,7 +1512,7 @@ async def hana_expensive_queries(x_api_key: str = Header(None), top_n: int = 10)
     Ranked by duration, includes CPU time and lock wait.
     """
     verify_api_key(x_api_key)
-    queries = await _to_thread(get_expensive_queries, min(top_n, 50))
+    queries = await _to_thread(get_expensive_queries, min(top_n, 50), _timeout=60, _description="hana_expensive_queries")
     return {
         "timestamp": datetime.now().isoformat(),
         "query_count": len(queries),
@@ -1434,7 +1526,7 @@ async def hana_alerts(x_api_key: str = Header(None), hours: int = 24):
     Returns warnings and critical alerts from the specified time window.
     """
     verify_api_key(x_api_key)
-    alerts = await _to_thread(get_database_alerts, min(hours, 168))
+    alerts = await _to_thread(get_database_alerts, min(hours, 168), _timeout=60, _description="hana_alerts")
     return {
         "timestamp": datetime.now().isoformat(),
         "period_hours": hours,
@@ -1449,7 +1541,7 @@ async def hana_blocked_transactions(x_api_key: str = Header(None)):
     Shows blocker and blocked connections with lock type.
     """
     verify_api_key(x_api_key)
-    blocked = await _to_thread(get_blocked_transactions)
+    blocked = await _to_thread(get_blocked_transactions, _timeout=60, _description="hana_blocking")
     return {
         "timestamp": datetime.now().isoformat(),
         "blocked_count": len(blocked),
@@ -1463,7 +1555,7 @@ async def hana_database_info(x_api_key: str = Header(None)):
     Comprehensive HANA instance information via SQL.
     """
     verify_api_key(x_api_key)
-    info = await _to_thread(get_database_info)
+    info = await _to_thread(get_database_info, _timeout=90, _description="hana_info")
     return {
         "timestamp": datetime.now().isoformat(),
         "database": info
@@ -1495,7 +1587,7 @@ async def hana_run_sql(x_api_key: str = Header(None), query: str = ""):
         if re.search(rf'\b{keyword}\b', normalized):
             raise HTTPException(status_code=403, detail=f"Query contains forbidden keyword: {keyword}")
 
-    result = await _to_thread(run_hdbsql, query, 60)
+    result = await _to_thread(run_hdbsql, query, 60, _timeout=90, _description="hana_sql_query")
     if result.get("status") == "error":
         raise HTTPException(status_code=500, detail=result.get("error", "Query failed"))
 
@@ -1547,9 +1639,9 @@ async def execute_healing(
     logger.info(f"Executing healing operation: {operation} (dry_run={dry_run})")
 
     if operation == "system_parameters":
-        result = await _to_thread(heal_system_parameters, dry_run)
+        result = await _to_thread(heal_system_parameters, dry_run, _timeout=60, _description="heal_system_params")
     elif operation == "trace_cleanup":
-        result = await _to_thread(heal_trace_cleanup, dry_run)
+        result = await _to_thread(heal_trace_cleanup, dry_run, _timeout=60, _description="heal_trace_cleanup")
     else:
         raise HTTPException(
             status_code=404,
@@ -1612,7 +1704,7 @@ async def execute_command(
     try:
         if needs_hana_user:
             # HANA commands must run as HANA admin user for correct PATH/environment
-            hana_result = await _to_thread(run_shell_as_hana_user, command, timeout)
+            hana_result = await _to_thread(run_shell_as_hana_user, command, timeout, _timeout=timeout + 30, _description=f"execute_hana:{command[:50]}")
             execution_time = (datetime.now() - start_time).total_seconds()
 
             response = CommandResponse(
@@ -1624,24 +1716,18 @@ async def execute_command(
                 timestamp=datetime.now().isoformat()
             )
         else:
-            result = await _to_thread(
-                subprocess.run,
-                command,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True,
-                timeout=timeout,
-                cwd=cmd_request.working_dir
+            cmd_result = await _to_thread(
+                _run_subprocess_safe, command, timeout, True, cmd_request.working_dir,
+                _timeout=timeout + 30, _description=f"execute_cmd:{command[:50]}"
             )
 
             execution_time = (datetime.now() - start_time).total_seconds()
 
             response = CommandResponse(
-                status="success" if result.returncode == 0 else "error",
-                exit_code=result.returncode,
-                stdout=result.stdout,
-                stderr=result.stderr,
+                status=cmd_result.get("status", "error"),
+                exit_code=cmd_result.get("exit_code", 1),
+                stdout=cmd_result.get("output", ""),
+                stderr=cmd_result.get("error", "") or "",
                 execution_time=execution_time,
                 timestamp=datetime.now().isoformat()
             )
@@ -1721,29 +1807,23 @@ async def execute_command_as_user(
         # Use sudo -i -u to get full login environment (PATH, HANA_HOME, etc.)
         full_command = f"sudo -i -u {shlex.quote(user)} bash -c {shlex.quote(command)}"
 
-        result = await _to_thread(
-            subprocess.run,
-            full_command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-            timeout=timeout,
-            cwd=cmd_request.working_dir
+        cmd_result = await _to_thread(
+            _run_subprocess_safe, full_command, timeout, True, cmd_request.working_dir,
+            _timeout=timeout + 30, _description=f"execute_as_{user}:{command[:50]}"
         )
 
         execution_time = (datetime.now() - start_time).total_seconds()
 
         response = CommandResponse(
-            status="success" if result.returncode == 0 else "error",
-            exit_code=result.returncode,
-            stdout=result.stdout,
-            stderr=result.stderr,
+            status=cmd_result.get("status", "error"),
+            exit_code=cmd_result.get("exit_code", 1),
+            stdout=cmd_result.get("output", ""),
+            stderr=cmd_result.get("error", "") or "",
             execution_time=execution_time,
             timestamp=datetime.now().isoformat()
         )
 
-        logger.info(f"Command completed as {user}: exit_code={result.returncode}, time={execution_time:.2f}s")
+        logger.info(f"Command completed as {user}: exit_code={response.exit_code}, time={execution_time:.2f}s")
 
         return response
 

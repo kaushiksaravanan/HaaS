@@ -1,150 +1,54 @@
-# GCP Connection Configuration - CORRECTED
+# GCP Connection Configuration
 
-## ✅ Configuration Updates Applied
-
-### 1. Zone Correction
-**OLD**: `us-central1-a`
-**NEW**: `europe-west3-a`
-
-### 2. Project & Location
-**Project**: `sap-development`
-**Location**: `europe-west3`
-
-### 3. Instance Details
+## Instance Details
 - **Name**: `vlgdbzo3`
 - **Zone**: `europe-west3-a`
+- **Project**: `sap-development`
 - **HANA User**: `zo3adm`
 - **SID**: `ZO3`
-- **Instance Number**: `00`
+- **Instance Number**: `02`
 
-### 4. Authentication Method
-**Service Account**: `uihost@sap-development.iam.gserviceaccount.com`
-**Key File**: `hana_db_agent_toolkit/sap-development-23f9847d3c33.json`
+## Connection Method
 
-### 5. Connection Strategy
-✅ **Primary**: gcloud compute ssh (with service account key)
-❌ **Disabled**: Direct SSH (blocked by firewall)
+All access to the HANA server is via the **Remote Exec HTTP Server** running on port 9999.
 
-### 6. gcloud Command That Will Be Used
-```bash
-gcloud auth activate-service-account \
-  uihost@sap-development.iam.gserviceaccount.com \
-  --key-file=hana_db_agent_toolkit/sap-development-23f9847d3c33.json
-
-gcloud compute ssh zo3adm@vlgdbzo3 \
-  --zone=europe-west3-a \
-  --project=sap-development \
-  --command="<command>"
+```
+Local Machine → HTTP POST → Remote Exec Server (10.238.36.146:9999) → Shell → HANA
 ```
 
-## 📝 Environment Variables Set in .env
+### Remote Exec Server Endpoints
+| Endpoint | Method | Description |
+|---|---|---|
+| `/execute` | POST | Execute shell command |
+| `/hana/sql` | POST | Execute HANA SQL query |
+| `/hana/metrics/current` | GET | Current HANA metrics |
+| `/hana/metrics/history` | GET | Historical metrics |
+| `/health` | GET | Server health check |
 
-```bash
-# Google Cloud Platform
-GOOGLE_CLOUD_PROJECT=sap-development
-GOOGLE_CLOUD_LOCATION=europe-west3
-GOOGLE_APPLICATION_CREDENTIALS=hana_db_agent_toolkit/sap-development-23f9847d3c33.json
-GCP_AUTH_EMAIL=uihost@sap-development.iam.gserviceaccount.com
+### Authentication
+All requests require the `X-API-Key` header.
 
-# GCP Instance for HANA DB Agent Toolkit
-GCP_SERVICE_KEY_PATH=hana_db_agent_toolkit/sap-development-23f9847d3c33.json
-GCP_TOOLKIT_PROJECT_ID=sap-development
-GCP_TOOLKIT_INSTANCE_NAME=vlgdbzo3
-GCP_TOOLKIT_ZONE=europe-west3-a
-GCP_TOOLKIT_HANA_USER=zo3adm
-GCP_TOOLKIT_HANA_SID=ZO3
-GCP_TOOLKIT_INSTANCE_NUMBER=00
-```
-
-## 🔧 Code Changes Made
-
-### 1. `adk_app/tools/ssh_tools.py`
-- Updated `_get_gcp_details()` to prioritize `GCP_TOOLKIT_*` variables
-- Added logic to use `zo3adm` user for vlgdbzo3 instance
-- Service key authentication is now primary method
-
-### 2. `.env`
-- Fixed zone from `us-central1-a` to `europe-west3-a`
-- Updated project to `sap-development`
-- Set service account email
-- Configured `GOOGLE_APPLICATION_CREDENTIALS`
-
-## 📦 Prerequisites
-
-### To Enable Full Connectivity:
-
-**Option 1: Install gcloud CLI (Required)**
-```bash
-# Windows
-# Download from: https://cloud.google.com/sdk/docs/install-sdk#windows
-
-# After installation:
-gcloud auth activate-service-account \
-  uihost@sap-development.iam.gserviceaccount.com \
-  --key-file=hana_db_agent_toolkit/sap-development-23f9847d3c33.json
-
-gcloud config set project sap-development
-```
-
-**Option 2: Test Without gcloud (Mock Mode)**
-- System will return "connection failed" errors
-- UI and API will still work
-- Good for development/testing
-
-## 🧪 Testing After gcloud Installation
+## Environment Variables
 
 ```bash
-# Test 1: Verify gcloud auth
-gcloud auth list
+# Remote Exec Server
+REMOTE_EXEC_URL=http://10.238.36.146:9999
+REMOTE_EXEC_API_KEY=<your-api-key>
 
-# Test 2: Test SSH connection
-gcloud compute ssh zo3adm@vlgdbzo3 \
-  --zone=europe-west3-a \
-  --project=sap-development \
-  --command="echo 'Connection successful'"
-
-# Test 3: Run diagnostic via API
-curl -X POST http://localhost:8000/api/v1/instance/diagnostics
-
-# Test 4: Check UI
-# Open: http://localhost:3001/instance-monitoring
+# HANA Connection (used by remote exec server)
+HANA_SID=ZO3
+HANA_INSTANCE_NR=02
+HANA_USER=SYSTEM
+HANA_HOST=localhost
+HANA_PORT=30213
 ```
 
-## 🎯 Expected Behavior
-
-### Without gcloud CLI:
-- ❌ SSH connection fails (expected)
-- ✅ API endpoints work
-- ✅ Frontend UI loads
-- ℹ️ Diagnostics show "connection errors"
-
-### With gcloud CLI installed:
-- ✅ Service key authentication
-- ✅ SSH to vlgdbzo3 via gcloud
-- ✅ All 10 diagnostic checks work
-- ✅ Healing scripts can execute
-- ✅ VM snapshots can be created
-
-## 🔒 Security Notes
-
-1. **Service Key**: Already configured in project
-2. **Direct SSH**: Blocked by firewall (good security practice)
-3. **gcloud SSH**: Uses IAM permissions (more secure)
-4. **No Password Storage**: Service account uses key file only
-
-## 📊 Connection Flow
+## Connection Flow
 
 ```
-1. Load service key from: hana_db_agent_toolkit/sap-development-23f9847d3c33.json
-2. Authenticate gcloud CLI with service account
-3. Execute: gcloud compute ssh zo3adm@vlgdbzo3 --zone=europe-west3-a
-4. Switch to HANA user context (already zo3adm)
-5. Run commands: sapcontrol, HDB info, df, etc.
-6. Return results to API
-7. Display in React UI
+1. Frontend/API makes request to local FastAPI backend (port 8000)
+2. Backend sends HTTP request to Remote Exec Server (port 9999)
+3. Remote Exec Server executes command on vlgdbzo3
+4. Results returned via HTTP response
+5. Backend processes and returns to frontend
 ```
-
----
-
-**Status**: Configuration is now correct for vlgdbzo3 in europe-west3-a!
-**Next Step**: Install gcloud CLI to enable full connectivity.

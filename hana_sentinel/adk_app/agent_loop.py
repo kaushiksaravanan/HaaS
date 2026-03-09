@@ -1,11 +1,11 @@
-"""
-Agent Loop — Autonomous HANA Monitoring Orchestrator.
+﻿"""
+Agent Loop â€” Autonomous HANA Monitoring Orchestrator.
 
 Runs a periodic loop that:
-  Phase 1: SSH → VM, run analysis.sh
+  Phase 1: Remote exec â†’ run analysis.sh
   Phase 2: Parse errors, discover schema, fix script
   Phase 3: Health checks (services, memory, disk, alerts, connections)
-  Phase 4: Push fixes to HDB via docker exec → hdbsql
+  Phase 4: Push fixes to HDB via hdbsql
   Phase 5: Verify changes took effect
   Phase 6: Learn from results, generate PDF report
 
@@ -26,9 +26,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 logger = logging.getLogger("hana_sentinel.loop")
 
-# ──────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Configuration
-# ──────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 DEFAULT_INTERVAL = int(os.getenv("AGENT_LOOP_INTERVAL", "300"))  # 5 min
 DEFAULT_SID = os.getenv("HANA_SID", "")
 DEFAULT_INSTANCE = os.getenv("HANA_INSTANCE_NR", "")
@@ -38,24 +38,25 @@ HANA_PASSWORD = os.getenv("HANA_PASSWORD", "")
 HANA_DATABASE = os.getenv("HANA_DATABASE", "")
 
 
-def _hdbsql_query_via_ssh(query: str, database: str = "") -> dict:
-    """Execute a SQL query on HANA via SSH → docker exec → hdbsql."""
-    from adk_app.tools.ssh_tools import ssh_execute
+def _hdbsql_query_via_remote(query: str, database: str = "") -> dict:
+    """Execute a SQL query on HANA via the remote exec server."""
+    from adk_app.tools.hana_tools import execute_remote_command
 
     db = database or HANA_DATABASE
     sid = DEFAULT_SID
     instance = DEFAULT_INSTANCE
 
     hdbsql_cmd = (
-        f"docker exec -u {sid.lower()}adm {DEFAULT_CONTAINER} "
         f"/usr/sap/{sid}/HDB{instance}/exe/hdbsql "
         f"-i {instance} -u {HANA_USER} -p {HANA_PASSWORD} -d {db} "
         f"-C -A -j -x '{query}'"
     )
 
-    result = ssh_execute(hdbsql_cmd)
-    if result.get("status") == "success":
-        stdout = result.get("stdout", "")
+    result = execute_remote_command(hdbsql_cmd)
+    stdout = result.get("stdout", "")
+    stderr = result.get("stderr", "")
+    exit_code = result.get("exit_code", -1)
+    if exit_code == 0:
         # Parse rows from output
         rows = []
         for line in stdout.strip().split("\n"):
@@ -65,19 +66,19 @@ def _hdbsql_query_via_ssh(query: str, database: str = "") -> dict:
         return {"status": "success", "data": rows, "raw": stdout}
     return {
         "status": "error",
-        "error_message": result.get("error_message", result.get("stderr", "unknown")),
+        "error_message": stderr or stdout or "unknown",
         "data": [],
     }
 
 
-# ──────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Phase Functions
-# ──────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def phase1_run_analysis(sid: str) -> dict:
     """Phase 1: Run the analysis script on the VM."""
-    logger.info("═══ PHASE 1: Running analysis script ═══")
+    logger.info("â•â•â• PHASE 1: Running analysis script â•â•â•")
     from adk_app.tools.analysis_tools import run_analysis_script
 
     result = run_analysis_script(sid, "all")
@@ -91,7 +92,7 @@ def phase1_run_analysis(sid: str) -> dict:
 
 def phase2_detect_and_fix(analysis_output: str) -> dict:
     """Phase 2: Parse errors, discover schema, fix script."""
-    logger.info("═══ PHASE 2: Detecting and fixing errors ═══")
+    logger.info("â•â•â• PHASE 2: Detecting and fixing errors â•â•â•")
     from adk_app.tools.analysis_tools import (
         parse_analysis_errors,
         discover_hana_schema,
@@ -107,7 +108,7 @@ def phase2_detect_and_fix(analysis_output: str) -> dict:
     logger.info("Errors found: %d", error_count)
 
     if error_count == 0:
-        logger.info("No errors to fix — skipping schema discovery and fix phases")
+        logger.info("No errors to fix â€” skipping schema discovery and fix phases")
         return results
 
     # 2b: Discover correct schema for failing views
@@ -141,19 +142,19 @@ def phase2_detect_and_fix(analysis_output: str) -> dict:
 
 def phase3_health_checks(sid: str) -> dict:
     """Phase 3: Run health checks using sub-agent tools."""
-    logger.info("═══ PHASE 3: Running health checks ═══")
+    logger.info("â•â•â• PHASE 3: Running health checks â•â•â•")
 
     health = {}
 
     # 3a: Services
     try:
         logger.info("  Checking services...")
-        result = _hdbsql_query_via_ssh(
+        result = _hdbsql_query_via_remote(
             "SELECT SERVICE_NAME, HOST, PORT, ACTIVE_STATUS FROM SYS.M_SERVICES"
         )
         # If ACTIVE_STATUS fails, try without it
         if result.get("status") != "success" or "invalid column" in str(result):
-            result = _hdbsql_query_via_ssh(
+            result = _hdbsql_query_via_remote(
                 "SELECT SERVICE_NAME, HOST, PORT FROM SYS.M_SERVICES"
             )
         health["services"] = result
@@ -163,7 +164,7 @@ def phase3_health_checks(sid: str) -> dict:
     # 3b: Memory
     try:
         logger.info("  Checking memory...")
-        result = _hdbsql_query_via_ssh(
+        result = _hdbsql_query_via_remote(
             "SELECT SERVICE_NAME, TOTAL_MEMORY_USED_SIZE, EFFECTIVE_ALLOCATION_LIMIT "
             "FROM SYS.M_SERVICE_MEMORY"
         )
@@ -174,7 +175,7 @@ def phase3_health_checks(sid: str) -> dict:
     # 3c: Disk usage
     try:
         logger.info("  Checking disk usage...")
-        result = _hdbsql_query_via_ssh(
+        result = _hdbsql_query_via_remote(
             "SELECT USAGE_TYPE, USED_SIZE, TOTAL_SIZE FROM SYS.M_DISK_USAGE"
         )
         health["disk"] = result
@@ -194,14 +195,14 @@ def phase3_health_checks(sid: str) -> dict:
     # 3e: Alerts
     try:
         logger.info("  Checking active alerts...")
-        result = _hdbsql_query_via_ssh(
+        result = _hdbsql_query_via_remote(
             "SELECT ALERT_ID, ALERT_RATING, ALERT_NAME, ALERT_DETAILS "
             "FROM _SYS_STATISTICS.STATISTICS_CURRENT_ALERTS "
             "WHERE ALERT_RATING >= 3 ORDER BY ALERT_RATING DESC"
         )
         # Fallback without ALERT_NAME if it fails
         if result.get("status") != "success" or "invalid column" in str(result):
-            result = _hdbsql_query_via_ssh(
+            result = _hdbsql_query_via_remote(
                 "SELECT ALERT_ID, ALERT_RATING, ALERT_DETAILS "
                 "FROM _SYS_STATISTICS.STATISTICS_CURRENT_ALERTS "
                 "WHERE ALERT_RATING >= 3"
@@ -213,7 +214,7 @@ def phase3_health_checks(sid: str) -> dict:
     # 3f: Connections
     try:
         logger.info("  Checking connections...")
-        result = _hdbsql_query_via_ssh(
+        result = _hdbsql_query_via_remote(
             "SELECT COUNT(*) AS CNT FROM SYS.M_CONNECTIONS WHERE CONNECTION_STATUS = 'RUNNING'"
         )
         health["connections"] = {
@@ -226,7 +227,7 @@ def phase3_health_checks(sid: str) -> dict:
     # 3g: Database info
     try:
         logger.info("  Checking database info...")
-        result = _hdbsql_query_via_ssh(
+        result = _hdbsql_query_via_remote(
             "SELECT DATABASE_NAME, VERSION, USAGE, START_TIME FROM SYS.M_DATABASE"
         )
         health["database"] = result
@@ -242,14 +243,14 @@ def phase3_health_checks(sid: str) -> dict:
 
 def phase4_push_fixes(sid: str, fixes: dict) -> dict:
     """Phase 4: Push any pending fixes to HDB."""
-    logger.info("═══ PHASE 4: Pushing fixes to HDB ═══")
+    logger.info("â•â•â• PHASE 4: Pushing fixes to HDB â•â•â•")
 
     results = {"pushed": [], "status": "success"}
 
     # If analysis script was fixed, re-run it to push corrected queries
     if fixes.get("applied_count", 0) > 0:
         logger.info(
-            "Analysis script was fixed — re-running to push corrected queries to HDB"
+            "Analysis script was fixed â€” re-running to push corrected queries to HDB"
         )
         from adk_app.tools.analysis_tools import run_analysis_script
 
@@ -260,7 +261,7 @@ def phase4_push_fixes(sid: str, fixes: dict) -> dict:
         }
         results["pushed"].append("Re-ran analysis.sh with corrected SQL queries")
     else:
-        logger.info("No fixes to push — script was already clean")
+        logger.info("No fixes to push â€” script was already clean")
         results["status"] = "no_changes"
 
     return results
@@ -268,7 +269,7 @@ def phase4_push_fixes(sid: str, fixes: dict) -> dict:
 
 def phase5_verify(sid: str, fixes: dict, push_result: dict) -> dict:
     """Phase 5: Verify that fixes took effect."""
-    logger.info("═══ PHASE 5: Verifying changes ═══")
+    logger.info("â•â•â• PHASE 5: Verifying changes â•â•â•")
 
     verification = {"checks": [], "status": "success"}
 
@@ -300,7 +301,7 @@ def phase5_verify(sid: str, fixes: dict, push_result: dict) -> dict:
 
     # 5b: Verify HANA connectivity
     try:
-        result = _hdbsql_query_via_ssh("SELECT 1 FROM DUMMY")
+        result = _hdbsql_query_via_remote("SELECT 1 FROM DUMMY")
         verification["checks"].append(
             {
                 "name": "hana_connectivity",
@@ -319,12 +320,12 @@ def phase5_verify(sid: str, fixes: dict, push_result: dict) -> dict:
 
     # 5c: Verify services are running
     try:
-        result = _hdbsql_query_via_ssh(
+        result = _hdbsql_query_via_remote(
             "SELECT COUNT(*) FROM SYS.M_SERVICES WHERE ACTIVE_STATUS = 'YES'"
         )
         # Fallback
         if result.get("status") != "success":
-            result = _hdbsql_query_via_ssh("SELECT COUNT(*) FROM SYS.M_SERVICES")
+            result = _hdbsql_query_via_remote("SELECT COUNT(*) FROM SYS.M_SERVICES")
         verification["checks"].append(
             {
                 "name": "services_active",
@@ -360,7 +361,7 @@ def phase6_learn_and_report(
     fixes: dict,
 ) -> dict:
     """Phase 6: Record learned fixes and generate PDF report."""
-    logger.info("═══ PHASE 6: Learning and generating report ═══")
+    logger.info("â•â•â• PHASE 6: Learning and generating report â•â•â•")
 
     results = {"learning": {}, "report": {}}
 
@@ -405,9 +406,9 @@ def phase6_learn_and_report(
     return results
 
 
-# ──────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Main Loop
-# ──────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def run_cycle(sid: str = "", cycle_num: int = 1) -> dict:
@@ -423,10 +424,10 @@ def run_cycle(sid: str = "", cycle_num: int = 1) -> dict:
     sid = sid or DEFAULT_SID
     ts = datetime.now().isoformat()
 
-    logger.info("╔══════════════════════════════════════════╗")
-    logger.info("║  HANA Sentinel — Cycle #%d               ║", cycle_num)
-    logger.info("║  SID: %s  |  %s      ║", sid, ts[:19])
-    logger.info("╚══════════════════════════════════════════╝")
+    logger.info("â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—")
+    logger.info("â•‘  HANA Sentinel â€” Cycle #%d               â•‘", cycle_num)
+    logger.info("â•‘  SID: %s  |  %s      â•‘", sid, ts[:19])
+    logger.info("â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
 
     cycle_data = {
         "sid": sid,
@@ -459,7 +460,7 @@ def run_cycle(sid: str = "", cycle_num: int = 1) -> dict:
             }
             if analysis_result.get("status") != "success":
                 cycle_data["recommendations"].append(
-                    "Analysis script failed to run — check SSH connection and script path"
+                    "Analysis script failed to run - check remote exec server connection and script path"
                 )
 
         cycle_data["phases"]["errors"] = detect_fix.get("errors", {})
@@ -476,17 +477,17 @@ def run_cycle(sid: str = "", cycle_num: int = 1) -> dict:
         storage = health.get("storage", {})
         if storage.get("has_critical"):
             cycle_data["recommendations"].append(
-                "CRITICAL: Storage alerts detected — immediate attention required"
+                "CRITICAL: Storage alerts detected â€” immediate attention required"
             )
         if storage.get("has_warning"):
             cycle_data["recommendations"].append(
-                "WARNING: Storage approaching capacity — plan cleanup or expansion"
+                "WARNING: Storage approaching capacity â€” plan cleanup or expansion"
             )
 
         alerts = health.get("alerts", {})
         if alerts.get("data") and len(alerts["data"]) > 0:
             cycle_data["recommendations"].append(
-                f"{len(alerts['data'])} active HANA alerts with rating >= 3 — review recommended"
+                f"{len(alerts['data'])} active HANA alerts with rating >= 3 â€” review recommended"
             )
 
         # Phase 4: Push fixes
@@ -534,7 +535,7 @@ def run_cycle(sid: str = "", cycle_num: int = 1) -> dict:
             pass
 
     logger.info(
-        "Cycle #%d complete — Status: %s",
+        "Cycle #%d complete â€” Status: %s",
         cycle_num,
         cycle_data["overall_status"],
     )
@@ -568,14 +569,14 @@ def run_loop(
             cycle_num += 1
 
             if max_cycles and cycle_num > max_cycles:
-                logger.info("Reached max cycles (%d) — stopping", max_cycles)
+                logger.info("Reached max cycles (%d) â€” stopping", max_cycles)
                 break
 
             cycle_data = run_cycle(sid, cycle_num)
 
             report = cycle_data.get("phases", {}).get("report", {})
             if report.get("status") == "success":
-                logger.info("📄 Report: %s", report.get("report_path"))
+                logger.info("ðŸ“„ Report: %s", report.get("report_path"))
 
             if max_cycles and cycle_num >= max_cycles:
                 break

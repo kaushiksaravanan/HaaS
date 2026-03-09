@@ -51,7 +51,7 @@ pip install -r requirements.txt
 Copy `.env.example` to `.env` and configure your settings:
 - HANA connection details
 - Google Cloud project
-- SSH access credentials
+- Remote exec server URL and API key
 
 #### 3. Run Development Environment
 
@@ -225,7 +225,7 @@ The platform features rich, real-time animations and colorful designs:
 - Google ADK - Agent Development Kit
 - Gemini 2.0 Flash - LLM
 - hdbcli - SAP HANA client
-- Paramiko - SSH client
+- requests - HTTP client
 
 ### Frontend
 - React 18 - UI framework
@@ -282,7 +282,7 @@ See `.env.example` for all available configuration options.
 Key variables:
 - `GOOGLE_CLOUD_PROJECT` - GCP project ID
 - `HANA_HOST`, `HANA_PORT`, `HANA_USER`, `HANA_PASSWORD` - HANA connection
-- `SSH_HOST`, `SSH_USER` - SSH access for OS-level operations
+- `REMOTE_EXEC_URL`, `REMOTE_EXEC_API_KEY` - Remote exec server for OS-level operations
 - `ADK_MODEL` - Gemini model to use (default: gemini-2.0-flash)
 
 ### Risk Scores

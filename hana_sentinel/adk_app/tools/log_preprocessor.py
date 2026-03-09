@@ -610,7 +610,7 @@ def check_hdb_storage(
 ) -> dict:
     """Check HDB storage paths and available space.
     Runs df on all HDB-relevant paths and returns a preprocessed summary.
-    This is a convenience wrapper that uses docker_exec or ssh_execute.
+    This is a convenience wrapper that uses docker_exec or remote exec.
 
     Args:
         data_path (str): HDB data volume path.
@@ -638,7 +638,7 @@ def check_hdb_storage(
         + " 2>/dev/null"
     )
 
-    # Try docker first, then SSH
+    # Try docker first, then remote exec
     result = None
     container = os.getenv("HANA_CONTAINER_NAME", "")
     if container:
@@ -651,14 +651,19 @@ def check_hdb_storage(
 
     if result is None or result.get("status") != "success":
         try:
-            from .ssh_tools import ssh_execute
+            from .hana_tools import execute_remote_command
 
-            result = ssh_execute(df_cmd)
+            exec_result = execute_remote_command(df_cmd)
+            result = {
+                "status": "success" if exec_result.get("exit_code", -1) == 0 else "error",
+                "stdout": exec_result.get("stdout", ""),
+                "error_message": exec_result.get("stderr", ""),
+            }
         except Exception as e:
             return {
                 "status": "error",
                 "error_message": (
-                    f"Cannot check HDB storage — no container or SSH: {e}"
+                    f"Cannot check HDB storage — no container or remote exec: {e}"
                 ),
                 "paths_checked": paths,
             }

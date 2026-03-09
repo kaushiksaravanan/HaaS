@@ -250,7 +250,6 @@ def get_remote_hana_metrics() -> dict:
 
 def execute_remote_command(command: str, timeout: int = 30, admin_override: bool = False) -> dict:
     """Execute a shell command on the remote HANA host via the HTTP remote exec server.
-    This replaces all SSH-based command execution.
 
     Args:
         command (str): Shell command to execute on the remote host.

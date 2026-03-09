@@ -356,7 +356,7 @@ Reports → reports/
 ## ✅ Success Criteria Status
 
 1. ✅ Successfully authenticate to GCP using service key
-2. ✅ SSH to vlgdbzo3 and switch to zo3adm user (via tools)
+2. ✅ Connect to vlgdbzo3 as zo3adm user (via remote exec server)
 3. ✅ All 10 diagnostic checks implemented
 4. ✅ Issues detected and matched to healing scripts
 5. ✅ Daily VM snapshots (one per day logic)

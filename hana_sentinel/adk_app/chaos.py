@@ -9,8 +9,7 @@ import logging
 from typing import Dict, Any, List
 from datetime import datetime
 
-from .tools.hana_tools import query_hana, execute_hana_sql
-from .tools.ssh_tools import ssh_execute, check_global_ini
+from .tools.hana_tools import query_hana, execute_hana_sql, execute_remote_command
 from .tools.rag_tools import rag_query
 from .models import ActionCertificate, RiskBudget, PolicyEngine, RISK_SCORES
 
@@ -96,7 +95,7 @@ class IndexserverCrashScenario(ChaosScenario):
 
     def simulate(self) -> dict:
         """Simulate by checking what would happen (safe mock)."""
-        # In real chaos: ssh_execute("kill -9 $(pgrep hdbindexserver)")
+        # In real chaos: execute_remote_command("kill -9 $(pgrep hdbindexserver)", admin_override=True)
         return {
             "action": "Simulated indexserver crash",
             "method": "kill -9 on hdbindexserver PID",
@@ -125,7 +124,7 @@ class LogDiskFullScenario(ChaosScenario):
         )
 
     def simulate(self) -> dict:
-        # In real chaos: ssh_execute("dd if=/dev/zero of=/hana/log/fill bs=1M count=5000")
+        # In real chaos: execute_remote_command("dd if=/dev/zero of=/hana/log/fill bs=1M count=5000", admin_override=True)
         return {
             "action": "Simulated log disk fill",
             "method": "dd if=/dev/zero of=/hana/log/fill",
@@ -217,8 +216,9 @@ class MissingGlobalIniScenario(ChaosScenario):
         }
 
     def verify(self) -> bool:
-        result = check_global_ini()
-        return result.get("status") == "compliant"
+        result = execute_remote_command("cat /usr/sap/*/SYS/global/hdb/custom/config/global.ini")
+        stdout = result.get("stdout", "")
+        return "basepath_logbackup" in stdout
 
 
 # ──────────────────────────────────────────────

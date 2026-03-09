@@ -1,7 +1,6 @@
 google-adk
 google-cloud-aiplatform
 hdbcli
-paramiko
 browser-use
 playwright
 pydantic

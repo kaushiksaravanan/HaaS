@@ -2,8 +2,8 @@
 HTTP Command Execution Client
 ==============================
 
-Alternative connection method for executing commands on remote instances
-when SSH/gcloud access is not available.
+Connection method for executing commands on remote instances
+via the remote exec server.
 
 Connects to remote_exec_server.py running on the target instance.
 """
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class HTTPCommandExecutor:
-    """Execute commands via HTTP API instead of SSH"""
+    """Execute commands via HTTP API"""
 
     def __init__(
         self,
@@ -486,7 +486,7 @@ def execute_http_command(command: str, timeout: int = 60, user: str = None) -> d
         timeout: Command timeout in seconds
         user: User to execute as (default: None uses server default)
 
-    Returns dict compatible with ssh_execute format:
+    Returns dict with fields:
     {
         "output": str,
         "error": str,
@@ -509,7 +509,7 @@ def execute_http_command(command: str, timeout: int = 60, user: str = None) -> d
     else:
         result = executor.execute_command(command, timeout=timeout)
 
-    # Convert to ssh_execute compatible format
+    # Normalize to standard format
     return {
         "output": result.get("output", ""),
         "error": result.get("error", ""),
@@ -532,7 +532,7 @@ def execute_hana_command(command: str, timeout: int = 60) -> dict:
         timeout: Command timeout in seconds
 
     Returns:
-        dict: ssh_execute compatible format
+        dict: command result with output, error, exit_code, status
     """
     executor = get_http_executor()
     hana_user = os.getenv("GCP_TOOLKIT_HANA_USER", "")

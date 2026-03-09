@@ -320,7 +320,7 @@ def discover_hana_schema(view_names: str) -> dict:
 def fix_analysis_script(errors_json: str, schema_json: str) -> dict:
     """Fix the analysis.sh script on the VM based on detected errors and
     discovered schema. Generates sed commands to replace invalid column
-    references with correct ones and applies them via SSH.
+    references with correct ones and applies them via remote exec.
 
     The tool backs up the original script before making changes.
 

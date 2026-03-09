@@ -119,11 +119,11 @@ export default function Layout() {
                 systemStatus.apiConnected && systemStatus.dbConnected ? 'text-success-600' :
                 systemStatus.apiConnected ? 'text-warning-600' : 'text-danger-600'
               }`}>
-                <div className={`w-2 h-2 rounded-full ${
+                <span className={`w-2 h-2 rounded-full ${
                   systemStatus.checking ? 'bg-warning-500 animate-pulse' :
                   systemStatus.apiConnected && systemStatus.dbConnected ? 'bg-success-500 animate-pulse' :
                   systemStatus.apiConnected ? 'bg-warning-500' : 'bg-danger-500'
-                }`}></div>
+                }`}></span>
                 {systemStatus.checking ? 'Checking...' :
                  systemStatus.apiConnected && systemStatus.dbConnected ? 'Online' :
                  systemStatus.apiConnected ? 'Degraded' : 'Offline'}

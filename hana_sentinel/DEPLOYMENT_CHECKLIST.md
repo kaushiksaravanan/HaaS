@@ -17,7 +17,7 @@ Complete checklist for deploying HANA Sentinel to Google App Engine.
 - [ ] `app.yaml` has correct project settings
 - [ ] Environment variables in `app.yaml` are up to date
 - [ ] HANA connection details configured
-- [ ] SSH credentials configured
+- [ ] Remote exec server URL configured
 - [ ] Google Cloud project ID is correct
 
 ### 3. Frontend Setup
@@ -144,7 +144,7 @@ Complete checklist for deploying HANA Sentinel to Google App Engine.
 - [ ] Check App Engine logs: `gcloud app logs read`
 - [ ] Verify environment variables
 - [ ] Test HANA connection
-- [ ] Check SSH access
+- [ ] Check remote exec server access
 - [ ] Verify file permissions
 
 #### 404 Errors

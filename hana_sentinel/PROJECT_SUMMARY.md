@@ -227,7 +227,7 @@ Google App Engine
 │   - REST API             │
 │   - Agent orchestration  │
 │   - HANA integration     │
-│   - SSH tools            │
+│   - Remote exec tools    │
 └─────────────────────────┘
 ```
 

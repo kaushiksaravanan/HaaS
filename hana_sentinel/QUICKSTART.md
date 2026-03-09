@@ -98,7 +98,7 @@ npm run build
 ## Next Steps
 
 1. Configure your HANA connection in `.env`
-2. Set up SSH access for OS-level operations
+2. Configure the remote exec server URL in `.env`
 3. Configure Google Cloud project
 4. Enable RAG knowledge base
 5. Customize risk policies

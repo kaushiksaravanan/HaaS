@@ -90,7 +90,7 @@ const InstanceMonitoring = () => {
 
     return (
       <span className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border ${styles[status] || styles.info}`}>
-        <div className="w-1.5 h-1.5 rounded-full bg-current"></div>
+        <span className="w-1.5 h-1.5 rounded-full bg-current"></span>
         {status?.toUpperCase()}
       </span>
     );
@@ -145,16 +145,16 @@ const InstanceMonitoring = () => {
               <h1 className="font-serif text-3xl font-semibold text-foreground tracking-tight">
                 {instanceStatus?.instance_name || import.meta.env.VITE_HANA_INSTANCE_NAME || 'Unknown Instance'}
               </h1>
-              <p className="text-muted-foreground mt-1 flex items-center gap-3">
+              <div className="text-muted-foreground mt-1 flex items-center gap-3">
                 <span>SAP HANA Instance</span>
                 <span className="inline-flex items-center gap-1.5 text-xs font-medium">
-                  <div className={`w-2 h-2 rounded-full ${
+                  <span className={`w-2 h-2 rounded-full ${
                     wsStatus === 'connected' ? 'bg-success-500 animate-pulse' :
                     wsStatus === 'error' ? 'bg-danger-500' : 'bg-warning-500'
-                  }`}></div>
+                  }`}></span>
                   {wsStatus === 'connected' ? 'Live' : wsStatus === 'error' ? 'Disconnected' : 'Connecting'}
                 </span>
-              </p>
+              </div>
             </div>
           </div>
 

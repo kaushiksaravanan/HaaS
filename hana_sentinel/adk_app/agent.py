@@ -309,10 +309,10 @@ Key queries:
 Rules:
 - Flag if last full backup exceeds max age (configurable, default: 24 hours).
 - Flag if any backup has STATE_NAME != 'successful'.
-- Before triggering backup, verify basepath_logbackup is configured (use check_global_ini).
+- Before triggering backup, verify basepath_logbackup is configured (use execute_remote_command to check global.ini).
 - Risk cost: Read catalog = 1 pt, Trigger differential = 6 pts, Trigger full = 6 pts.
 """,
-    tools=[query_hana, execute_hana_sql, check_global_ini],
+    tools=[query_hana, execute_hana_sql, execute_remote_command],
 )
 
 
