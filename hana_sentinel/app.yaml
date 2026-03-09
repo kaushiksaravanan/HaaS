@@ -1,0 +1,107 @@
+runtime: python311
+entrypoint: gunicorn -w 4 -k uvicorn.workers.UvicornWorker adk_app.api:app
+
+# Handlers for static files and routing
+handlers:
+  # Static assets (CSS, JS, images)
+  - url: /assets
+    static_dir: frontend/dist/assets
+    secure: always
+  
+  # API routes
+  - url: /api/.*
+    script: auto
+    secure: always
+  
+  # React app routing - serve index.html for all other routes
+  - url: /.*
+    script: auto
+    secure: always
+
+env_variables:
+  # Google Cloud — set actual values via Secret Manager or gcloud app deploy --set-env-vars
+  GOOGLE_CLOUD_PROJECT: ""
+  GOOGLE_CLOUD_LOCATION: ""
+  GCP_AUTH_EMAIL: ""
+  
+  # HANA Connection — set actual values before deployment
+  HANA_HOST: ""
+  HANA_PORT: ""
+  HANA_USER: ""
+  HANA_PASSWORD: ""
+  HANA_SID: ""
+  HANA_INSTANCE_NR: ""
+  HANA_ENCRYPT: "false"
+  HANA_SSL_VALIDATE: "false"
+  HANA_CONNECT_TIMEOUT: "15"
+  HANA_MAX_RETRIES: "3"
+  HANA_DATA_PATH: ""
+
+  # Remote Exec Server
+  REMOTE_EXEC_URL: ""
+  REMOTE_EXEC_API_KEY: ""
+
+  # Config
+  SAP_SUPPORT_URL: "https://me.sap.com/notes"
+  BROWSER_ALLOWED_DOMAINS: "support.sap.com,me.sap.com,launchpad.support.sap.com"
+  BROWSER_MODEL: "gemini-2.0-flash"
+  ADK_MODEL: "gemini-2.0-flash"
+  
+  # RAG
+  RAG_CORPUS_NAME: "sap-hana-kb"
+  RAG_TOP_K: "5"
+  RAG_DISTANCE_THRESHOLD: "0.5"
+  RAG_CHUNK_SIZE: "512"
+  RAG_CHUNK_OVERLAP: "100"
+  RAG_MAX_EMBED_RPM: "900"
+  RAG_DEFAULT_CONFIDENCE: "0.85"
+
+  # Risk & Governance
+  RISK_DAILY_BASELINE: "100"
+  TRUST_REWARD_DAYS: "7"
+  TRUST_REWARD_FACTOR: "1.1"
+  TRUST_MAX_MULTIPLIER: "1.5"
+  TRUST_PENALTY_MULTIPLIER: "0.75"
+  GATE_HOOTL_MAX: "50"
+  GATE_HOTL_MAX: "75"
+  GATE_HITL_ASYNC_MAX: "90"
+  GATE_HITL_SYNC_MAX: "100"
+  HIGH_RISK_THRESHOLD: "12"
+  FROZEN_ALLOWED_OPS: "read_monitoring,log_analysis,config_read"
+  UNKNOWN_OP_COST: "25"
+
+  # Health Thresholds
+  CPU_WARNING_PCT: "80"
+  CPU_CRITICAL_PCT: "95"
+  MEM_WARNING_PCT: "85"
+  MEM_CRITICAL_PCT: "95"
+  DISK_WARNING_PCT: "80"
+  DISK_CRITICAL_PCT: "90"
+  BACKUP_MAX_AGE_HOURS: "24"
+  
+  # Risk Scores
+  RISK_read_monitoring: "1"
+  RISK_log_analysis: "2"
+  RISK_config_read: "1"
+  RISK_parameter_change: "6"
+  RISK_global_ini_mod: "6"
+  RISK_backup_execution: "6"
+  RISK_service_restart: "12"
+  RISK_security_change: "8"
+  RISK_data_modification: "15"
+  RISK_failover_trigger: "20"
+  
+  # Container
+  HANA_CONTAINER_NAME: "hxehana"
+  CONTAINER_USER: "hxeadm"
+  CONTAINER_RUNTIME: "docker"
+  REMOTE_DOCKER_BIN: "docker"
+
+  # PubSub / Cloud Run
+  PUBSUB_ALERT_TOPIC: "hana-sentinel-alerts"
+  PUBSUB_EVENT_SUBSCRIPTION: "hana-sentinel-events-sub"
+  CLOUDRUN_SERVICE: "hana-sentinel-agent"
+
+  # Logs
+  LOG_MAX_CHARS: "4000"
+  LOG_MAX_LINES: "80"

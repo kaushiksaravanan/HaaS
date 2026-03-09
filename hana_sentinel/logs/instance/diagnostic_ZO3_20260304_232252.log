@@ -1,0 +1,96 @@
+================================================================================
+HANA INSTANCE DIAGNOSTIC REPORT
+================================================================================
+Diagnostic ID: diag_ZO3_20260304_232252
+Timestamp: 2026-03-04T23:22:52.199642
+Instance: vlgdbzo3
+SID: ZO3
+Instance Number: 00
+================================================================================
+
+Overall Status: CRITICAL
+Issues Detected: 2
+
+ISSUES:
+  - process_status: ssh_execute() got an unexpected keyword argument 'instance_name'
+  - hdb_info: ssh_execute() got an unexpected keyword argument 'instance_name'
+
+================================================================================
+DIAGNOSTIC CHECKS
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: PROCESS_STATUS
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: critical
+error: ssh_execute() got an unexpected keyword argument 'instance_name'
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: HDB_INFO
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: critical
+error: ssh_execute() got an unexpected keyword argument 'instance_name'
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: DISK_USAGE
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: warning
+error: ssh_execute() got an unexpected keyword argument 'instance_name'
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: DATABASE_VERSION
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: info
+error: ssh_execute() got an unexpected keyword argument 'instance_name'
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: USERSTORE
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: warning
+error: ssh_execute() got an unexpected keyword argument 'instance_name'
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: DATABASE_ALERTS
+────────────────────────────────────────────────────────────────────────────────
+Status: warning
+Severity: info
+error: Unable to retrieve alerts (database may be down or credentials not configured)
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: MEMORY_USAGE
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: warning
+error: ssh_execute() got an unexpected keyword argument 'instance_name'
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: BACKUP_STATUS
+────────────────────────────────────────────────────────────────────────────────
+Status: warning
+Severity: info
+error: Unable to retrieve backup status (BKPMON key may not be configured)
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: SYSTEM_PARAMETERS
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: warning
+error: ssh_execute() takes 1 positional argument but 4 were given
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: TRACE_DIRECTORY
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: info
+error: ssh_execute() takes 1 positional argument but 4 were given
+
+================================================================================
+Diagnostic completed: 2026-03-04T23:22:52.448974
+Log file: C:\Users\I587436\Downloads\HanaS\hana_sentinel\logs\instance\diagnostic_ZO3_20260304_232252.log
+================================================================================

@@ -1,0 +1,106 @@
+================================================================================
+HANA INSTANCE DIAGNOSTIC REPORT
+================================================================================
+Diagnostic ID: diag_ZO3_20260309_150205
+Timestamp: 2026-03-09T15:02:05.368498
+Instance: vlgdbzo3
+SID: ZO3
+Instance Number: 00
+================================================================================
+
+Overall Status: CRITICAL
+Issues Detected: 2
+
+ISSUES:
+  - process_status: Process check failed
+  - hdb_info: Critical issue
+
+================================================================================
+DIAGNOSTIC CHECKS
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: PROCESS_STATUS
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: critical
+error: Process check failed
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: HDB_INFO
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: critical
+is_running: False
+output: SID: ZO3, Instance: 00, User: zo3adm
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: DISK_USAGE
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: warning
+error: Disk check failed
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: DATABASE_VERSION
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: info
+version: Unknown
+version_info: 
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: USERSTORE
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: warning
+error: Userstore check failed
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: DATABASE_ALERTS
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: ok
+alerts: []
+alert_count: 0
+message: No alerts
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: MEMORY_USAGE
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: success
+memory_info: {'total': 'Unknown', 'used': 'Unknown', 'available': 'Unknown'}
+usage_percent: 0
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: BACKUP_STATUS
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: info
+backup_info: {'data_backup': 'Not configured', 'log_backup': 'Not configured'}
+message: Backup directories configured
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: SYSTEM_PARAMETERS
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: warning
+parameters: {'swappiness': {'value': '10', 'expected': '10', 'status': 'ok'}, 'transparent_hugepages': {'value': 'always madvise [never]', 'expected': '[never]', 'status': 'ok'}, 'aslr': {'value': '2', 'expected': '0', 'status': 'warning'}}
+all_ok: False
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: TRACE_DIRECTORY
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: info
+trace_directory: /usr/sap/ZO3/HDB00/*/trace
+trace_size: Unknown
+recent_files: []
+file_count: 0
+
+================================================================================
+Diagnostic completed: 2026-03-09T15:02:12.294026
+Log file: C:\Users\I587436\Downloads\HanaS\hana_sentinel\logs\instance\diagnostic_ZO3_20260309_150212.log
+================================================================================

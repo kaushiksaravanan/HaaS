@@ -1,0 +1,96 @@
+================================================================================
+HANA INSTANCE DIAGNOSTIC REPORT
+================================================================================
+Diagnostic ID: diag_ZO3_20260309_152925
+Timestamp: 2026-03-09T15:29:25.550770
+Instance: vlgdbzo3
+SID: ZO3
+Instance Number: 00
+================================================================================
+
+Overall Status: CRITICAL
+Issues Detected: 2
+
+ISSUES:
+  - process_status: HTTPConnectionPool(host='10.238.36.146', port=9999): Max retries exceeded with url: /diagnostics (Caused by ConnectTimeoutError(<HTTPConnection(host='10.238.36.146', port=9999) at 0x19793a86330>, 'Connection to 10.238.36.146 timed out. (connect timeout=60)'))
+  - hdb_info: HTTPConnectionPool(host='10.238.36.146', port=9999): Max retries exceeded with url: /node/info (Caused by ConnectTimeoutError(<HTTPConnection(host='10.238.36.146', port=9999) at 0x19793a84770>, 'Connection to 10.238.36.146 timed out. (connect timeout=30)'))
+
+================================================================================
+DIAGNOSTIC CHECKS
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: PROCESS_STATUS
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: critical
+error: HTTPConnectionPool(host='10.238.36.146', port=9999): Max retries exceeded with url: /diagnostics (Caused by ConnectTimeoutError(<HTTPConnection(host='10.238.36.146', port=9999) at 0x19793a86330>, 'Connection to 10.238.36.146 timed out. (connect timeout=60)'))
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: HDB_INFO
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: critical
+error: HTTPConnectionPool(host='10.238.36.146', port=9999): Max retries exceeded with url: /node/info (Caused by ConnectTimeoutError(<HTTPConnection(host='10.238.36.146', port=9999) at 0x19793a84770>, 'Connection to 10.238.36.146 timed out. (connect timeout=30)'))
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: DISK_USAGE
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: warning
+error: HTTPConnectionPool(host='10.238.36.146', port=9999): Max retries exceeded with url: /diagnostics (Caused by ConnectTimeoutError(<HTTPConnection(host='10.238.36.146', port=9999) at 0x19793a78e60>, 'Connection to 10.238.36.146 timed out. (connect timeout=60)'))
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: DATABASE_VERSION
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: info
+error: HTTPConnectionPool(host='10.238.36.146', port=9999): Max retries exceeded with url: /operational/version-info (Caused by ConnectTimeoutError(<HTTPConnection(host='10.238.36.146', port=9999) at 0x19793a78fe0>, 'Connection to 10.238.36.146 timed out. (connect timeout=30)'))
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: USERSTORE
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: warning
+error: HTTPConnectionPool(host='10.238.36.146', port=9999): Max retries exceeded with url: /diagnostics (Caused by ConnectTimeoutError(<HTTPConnection(host='10.238.36.146', port=9999) at 0x19793a7a8a0>, 'Connection to 10.238.36.146 timed out. (connect timeout=60)'))
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: DATABASE_ALERTS
+────────────────────────────────────────────────────────────────────────────────
+Status: warning
+Severity: info
+error: Unable to retrieve alerts
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: MEMORY_USAGE
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: warning
+error: HTTPConnectionPool(host='10.238.36.146', port=9999): Max retries exceeded with url: /observability/system-health (Caused by ConnectTimeoutError(<HTTPConnection(host='10.238.36.146', port=9999) at 0x19793a9c1d0>, 'Connection to 10.238.36.146 timed out. (connect timeout=30)'))
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: BACKUP_STATUS
+────────────────────────────────────────────────────────────────────────────────
+Status: warning
+Severity: info
+error: Unable to retrieve backup status
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: SYSTEM_PARAMETERS
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: warning
+error: HTTPConnectionPool(host='10.238.36.146', port=9999): Max retries exceeded with url: /observability/system-health (Caused by ConnectTimeoutError(<HTTPConnection(host='10.238.36.146', port=9999) at 0x19793a7a2d0>, 'Connection to 10.238.36.146 timed out. (connect timeout=30)'))
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: TRACE_DIRECTORY
+────────────────────────────────────────────────────────────────────────────────
+Status: error
+Severity: info
+error: HTTPConnectionPool(host='10.238.36.146', port=9999): Max retries exceeded with url: /diagnostics (Caused by ConnectTimeoutError(<HTTPConnection(host='10.238.36.146', port=9999) at 0x19793a79400>, 'Connection to 10.238.36.146 timed out. (connect timeout=60)'))
+
+================================================================================
+Diagnostic completed: 2026-03-09T15:32:45.054698
+Log file: C:\Users\I587436\Downloads\HanaS\hana_sentinel\logs\instance\diagnostic_ZO3_20260309_153245.log
+================================================================================

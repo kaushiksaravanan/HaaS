@@ -1,0 +1,155 @@
+╔══════════════════════════════════════════════════════════════════════╗
+║                    HANA DATABASE AGENT TOOLKIT                       ║
+║                    START HERE - READ THIS FIRST                      ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+Dear AI Agent,
+
+This toolkit has been created for you to safely monitor and maintain a 24/7
+running HANA database system. All instructions emphasize SAFETY FIRST.
+
+═══════════════════════════════════════════════════════════════════════
+
+📋 STEP 1: READ THE DOCUMENTATION
+
+   Primary Guide: docs/AGENT_EXECUTION_GUIDE.md
+   - Complete problem diagnosis and response matrix
+   - Safe command reference
+   - Approval requirements
+   - Verification procedures
+
+   Quick Reference: docs/QUICK_REFERENCE.md
+   - Fast lookup for common issues
+   - Command cheat sheet
+
+═══════════════════════════════════════════════════════════════════════
+
+🔍 STEP 2: WHEN AN ISSUE IS DETECTED
+
+   1. Run diagnostics FIRST:
+      cd scripts
+      ./quick_diagnostic.sh <SID> <INSTANCE_NUMBER>
+
+   2. Review output and identify the problem
+
+   3. Consult AGENT_EXECUTION_GUIDE.md for the correct response
+
+   4. GET APPROVAL before running any healing script
+
+═══════════════════════════════════════════════════════════════════════
+
+🏥 STEP 3: RUNNING HEALING SCRIPTS
+
+   ⚠️  CRITICAL: ALL healing scripts require explicit approval!
+
+   Available healing scripts (in parent directory ../):
+   - auto_db_userstoremanagement    [Risk: MEDIUM]
+   - auto_db_metadata                [Risk: MEDIUM-HIGH]
+   - auto_db_dbintegrations         [Risk: HIGH]
+   - auto_db_eligibility            [Risk: MEDIUM]
+
+   Example:
+   cd ..
+   ./auto_db_userstoremanagement <hostname>
+
+═══════════════════════════════════════════════════════════════════════
+
+✅ STEP 4: VERIFICATION (MANDATORY)
+
+   After ANY healing operation:
+   cd scripts
+   ./verify_healing.sh <script_name> <SID> <INSTANCE>
+
+   Example:
+   ./verify_healing.sh auto_db_userstoremanagement ABC 00
+
+═══════════════════════════════════════════════════════════════════════
+
+📊 STEP 5: LOGGING
+
+   ALL your actions must be logged to:
+   logs/agent_actions_YYYYMMDD_HHMM.log
+
+   Include:
+   - Timestamp
+   - Action taken
+   - Results
+   - Any errors or warnings
+
+═══════════════════════════════════════════════════════════════════════
+
+🚨 WHEN TO ESCALATE
+
+   Escalate to human operator if:
+   ☐ Database is DOWN
+   ☐ Multiple healing attempts failed
+   ☐ Unfamiliar error encountered
+   ☐ Verification shows issues persist
+   ☐ Any uncertainty about correct action
+
+═══════════════════════════════════════════════════════════════════════
+
+🛡️  SAFETY RULES (NEVER BREAK THESE)
+
+   ✅ DO:
+   - Run diagnostics before any action
+   - Request approval for all healing operations
+   - Verify after every healing operation
+   - Document everything
+   - Escalate when uncertain
+
+   ❌ NEVER:
+   - Run healing scripts without approval
+   - Skip verification steps
+   - Modify files outside this toolkit
+   - Ignore persistent errors
+   - Guess at solutions
+
+═══════════════════════════════════════════════════════════════════════
+
+📍 FILE LOCATIONS
+
+   Your toolkit:        ./hana_db_agent_toolkit/
+   Healing scripts:     ../ (parent directory)
+   Healing logs:        /tmp/db/auto/YYYYMMDD/
+   Your operation logs: ./logs/
+
+═══════════════════════════════════════════════════════════════════════
+
+📞 QUICK HELP
+
+   Problem: Database not responding
+   → Run: ./scripts/quick_diagnostic.sh <SID> <INSTANCE>
+   → Check: AGENT_EXECUTION_GUIDE.md section 1
+
+   Problem: Userstore keys not working
+   → Script: auto_db_userstoremanagement
+   → See: AGENT_EXECUTION_GUIDE.md section 1
+   → Verify: ./scripts/verify_healing.sh auto_db_userstoremanagement <SID> <INSTANCE>
+
+   Problem: Backup configuration issues
+   → Script: auto_db_metadata
+   → See: AGENT_EXECUTION_GUIDE.md section 2
+
+   Problem: System parameters wrong
+   → Script: auto_db_dbintegrations
+   → See: AGENT_EXECUTION_GUIDE.md section 3
+
+═══════════════════════════════════════════════════════════════════════
+
+🎯 GOLDEN RULES
+
+   1. SAFETY FIRST - Always
+   2. DIAGNOSE before acting
+   3. APPROVAL before healing
+   4. VERIFY after healing
+   5. DOCUMENT everything
+   6. ESCALATE when unsure
+
+═══════════════════════════════════════════════════════════════════════
+
+Good luck with your monitoring duties!
+Remember: It's better to ask than to break something.
+
+Version: 1.0
+Created: 2026-03-04

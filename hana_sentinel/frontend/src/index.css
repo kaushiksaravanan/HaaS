@@ -1,0 +1,334 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Source+Sans+3:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Serif Design System - CSS Variables */
+:root {
+  /* Colors */
+  --background: #FAFAF8;
+  --foreground: #1A1A1A;
+  --muted: #F5F3F0;
+  --muted-foreground: #6B6B6B;
+  --accent: #B8860B;
+  --accent-secondary: #D4A84B;
+  --accent-foreground: #FFFFFF;
+  --accent-muted: rgba(184, 134, 11, 0.06);
+  --border: #E8E4DF;
+  --border-hover: #D4CFC8;
+  --card: #FFFFFF;
+  --card-foreground: #1A1A1A;
+  --input: #E8E4DF;
+  --ring: #B8860B;
+
+  /* Typography */
+  font-family: "Source Sans 3", system-ui, sans-serif;
+  line-height: 1.6;
+  font-weight: 400;
+  color: var(--foreground);
+  background-color: var(--background);
+
+  /* Smooth rendering */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Base styles */
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Selection */
+::selection {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+
+/* Custom scrollbar - warm and refined */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--muted);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
+  border: 2px solid var(--muted);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-foreground);
+}
+
+/* Utility classes for the design system */
+@layer utilities {
+  .small-caps {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  .section-label {
+    @apply font-mono text-xs font-medium uppercase tracking-widest text-accent;
+  }
+
+  .rule-line {
+    @apply h-px bg-border;
+  }
+
+  .card-accent-top {
+    @apply border-t-2 border-t-accent;
+  }
+}
+
+/* React Flow custom styles */
+.react-flow__node {
+  font-size: 12px;
+}
+
+.react-flow__node-custom {
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--foreground);
+  min-width: 150px;
+  box-shadow: 0 1px 2px rgba(26,26,26,0.04);
+}
+
+.react-flow__node-custom.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.react-flow__handle {
+  background: var(--accent);
+  width: 8px;
+  height: 8px;
+}
+
+.react-flow__edge-path {
+  stroke: var(--border);
+  stroke-width: 2;
+}
+
+/* Prose styles for markdown content */
+.prose-serif {
+  h1, h2, h3, h4, h5, h6 {
+    font-family: "Playfair Display", Georgia, serif;
+    font-weight: 600;
+  }
+}
+
+/* Mini Browser GUI Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes typing {
+  from { width: 0; }
+  to { width: 100%; }
+}
+
+@keyframes blink {
+  50% { border-color: transparent; }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+.animate-slideIn {
+  animation: slideIn 0.3s ease-out forwards;
+}
+
+/* Browser cursor animation */
+.browser-cursor {
+  animation: blink 0.8s step-end infinite;
+}
+
+/* Scan line effect for browser */
+.scan-line {
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    rgba(59, 130, 246, 0.1) 50%,
+    transparent 100%
+  );
+  animation: scan 2s linear infinite;
+}
+
+@keyframes scan {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(100%); }
+}
+
+/* AI Cursor animation */
+@keyframes cursorMove {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(50px, 30px); }
+  50% { transform: translate(100px, -20px); }
+  75% { transform: translate(30px, 50px); }
+}
+
+.animate-cursor-move {
+  animation: cursorMove 4s ease-in-out infinite;
+}
+
+/* Browser window shadow */
+.browser-shadow {
+  box-shadow:
+    0 0 0 1px rgba(0,0,0,0.1),
+    0 4px 6px -1px rgba(0,0,0,0.1),
+    0 10px 20px -5px rgba(0,0,0,0.15),
+    0 25px 50px -12px rgba(0,0,0,0.25);
+}
+
+/* Glowing effect for active browser */
+.browser-glow {
+  box-shadow:
+    0 0 0 1px rgba(59, 130, 246, 0.3),
+    0 0 20px rgba(59, 130, 246, 0.2),
+    0 0 40px rgba(59, 130, 246, 0.1);
+}
+
+.browser-glow-purple {
+  box-shadow:
+    0 0 0 1px rgba(168, 85, 247, 0.3),
+    0 0 20px rgba(168, 85, 247, 0.2),
+    0 0 40px rgba(168, 85, 247, 0.1);
+}
+
+/* Playwright cursor click effect */
+@keyframes cursorClick {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.5);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+.cursor-click-effect {
+  animation: cursorClick 0.3s ease-out forwards;
+}
+
+/* Cursor trail effect */
+@keyframes cursorTrail {
+  0% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+}
+
+.cursor-trail {
+  animation: cursorTrail 0.5s ease-out forwards;
+}
+
+/* Highlight box animation for element targeting */
+@keyframes highlightPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(168, 85, 247, 0.2), 0 0 15px rgba(168, 85, 247, 0.3);
+  }
+}
+
+.highlight-box {
+  animation: highlightPulse 1s ease-in-out infinite;
+}
+
+/* Screenshot transition */
+@keyframes screenshotFadeIn {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+.screenshot-fade {
+  animation: screenshotFadeIn 0.3s ease-out forwards;
+}
+
+/* Typing indicator for input fields */
+@keyframes typingCursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.typing-cursor::after {
+  content: '|';
+  animation: typingCursor 0.8s step-end infinite;
+  color: #a855f7;
+  font-weight: bold;
+}
+
+/* Action badge slide in */
+@keyframes badgeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.action-badge {
+  animation: badgeSlideIn 0.2s ease-out forwards;
+}
+
+/* Progress bar glow */
+.progress-glow {
+  box-shadow: 0 0 10px currentColor, 0 0 20px currentColor;
+}
+

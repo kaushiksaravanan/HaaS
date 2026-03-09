@@ -1,0 +1,20 @@
+# Python 3.6 Compatible Requirements for vlgdbzo3
+# ================================================
+
+# FastAPI - Use older version compatible with Python 3.6
+fastapi==0.68.2
+
+# Uvicorn - ASGI server
+uvicorn==0.15.0
+
+# Pydantic - Data validation (v1.x for Python 3.6)
+pydantic==1.8.2
+
+# Starlette - Web framework (required by FastAPI)
+starlette==0.14.2
+
+# Optional: Click for CLI (used by uvicorn)
+click==7.1.2
+
+# Optional: H11 for HTTP/1.1 protocol
+h11==0.12.0

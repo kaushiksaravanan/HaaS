@@ -1,0 +1,14 @@
+google-adk
+google-cloud-aiplatform
+hdbcli
+paramiko
+browser-use
+playwright
+pydantic
+python-dotenv
+fastapi
+uvicorn[standard]
+gunicorn
+reportlab
+requests
+beautifulsoup4

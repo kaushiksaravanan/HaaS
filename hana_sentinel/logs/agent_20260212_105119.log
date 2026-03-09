@@ -1,0 +1,155 @@
+10:51:32 [DEBUG  ] google_adk.google.adk.models.gemma_llm: LiteLlm not available; Gemma3Ollama will not be defined: LiteLLM support requires: pip install google-adk[extensions]
+10:51:36 [INFO   ] hana_sentinel.loop: ╔══════════════════════════════════════════╗
+10:51:36 [INFO   ] hana_sentinel.loop: ║  HANA Sentinel — Cycle #1               ║
+10:51:36 [INFO   ] hana_sentinel.loop: ║  SID: HXE  |  2026-02-12T10:51:36      ║
+10:51:36 [INFO   ] hana_sentinel.loop: ╚══════════════════════════════════════════╝
+10:51:36 [INFO   ] hana_sentinel.loop: ═══ PHASE 1: Running analysis script ═══
+10:51:36 [WARNING] adk_app.tools.ssh_tools: gcloud auth issue: gcloud CLI not found. Install Google Cloud SDK.
+10:51:36 [WARNING] adk_app.tools.ssh_tools: gcloud SSH failed: [WinError 2] The system cannot find the file specified
+10:51:36 [WARNING] adk_app.tools.ssh_tools: gcloud IAP SSH failed: [WinError 2] The system cannot find the file specified
+10:51:36 [INFO   ] adk_app.tools.ssh_tools: Trying connection method: ssh_key
+10:51:40 [INFO   ] adk_app.tools.ssh_tools: SSH key path not found, skipping key-based auth
+10:51:40 [INFO   ] adk_app.tools.ssh_tools: Trying connection method: ssh_password
+10:51:41 [DEBUG  ] paramiko.transport: starting thread (client mode): 0x3c8b8c0
+10:51:41 [DEBUG  ] paramiko.transport: Local version/idstring: SSH-2.0-paramiko_4.0.0
+10:51:42 [DEBUG  ] paramiko.transport: Remote version/idstring: SSH-2.0-OpenSSH_8.4
+10:51:42 [INFO   ] paramiko.transport: Connected (version 2.0, client OpenSSH_8.4)
+10:51:42 [DEBUG  ] paramiko.transport: === Key exchange possibilities ===
+10:51:42 [DEBUG  ] paramiko.transport: kex algos: curve25519-sha256, curve25519-sha256@libssh.org, ecdh-sha2-nistp256, ecdh-sha2-nistp384, ecdh-sha2-nistp521, diffie-hellman-group-exchange-sha256, diffie-hellman-group16-sha512, diffie-hellman-group18-sha512, diffie-hellman-group14-sha256, diffie-hellman-group14-sha1, kex-strict-s-v00@openssh.com
+10:51:42 [DEBUG  ] paramiko.transport: server key: rsa-sha2-512, rsa-sha2-256, ssh-rsa, ecdsa-sha2-nistp256, ssh-ed25519
+10:51:42 [DEBUG  ] paramiko.transport: client encrypt: chacha20-poly1305@openssh.com, aes128-ctr, aes192-ctr, aes256-ctr, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+10:51:42 [DEBUG  ] paramiko.transport: server encrypt: chacha20-poly1305@openssh.com, aes128-ctr, aes192-ctr, aes256-ctr, aes128-gcm@openssh.com, aes256-gcm@openssh.com
+10:51:42 [DEBUG  ] paramiko.transport: client mac: umac-64-etm@openssh.com, umac-128-etm@openssh.com, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1-etm@openssh.com, umac-64@openssh.com, umac-128@openssh.com, hmac-sha2-256, hmac-sha2-512, hmac-sha1
+10:51:42 [DEBUG  ] paramiko.transport: server mac: umac-64-etm@openssh.com, umac-128-etm@openssh.com, hmac-sha2-256-etm@openssh.com, hmac-sha2-512-etm@openssh.com, hmac-sha1-etm@openssh.com, umac-64@openssh.com, umac-128@openssh.com, hmac-sha2-256, hmac-sha2-512, hmac-sha1
+10:51:42 [DEBUG  ] paramiko.transport: client compress: none, zlib@openssh.com
+10:51:42 [DEBUG  ] paramiko.transport: server compress: none, zlib@openssh.com
+10:51:42 [DEBUG  ] paramiko.transport: client lang: <none>
+10:51:42 [DEBUG  ] paramiko.transport: server lang: <none>
+10:51:42 [DEBUG  ] paramiko.transport: kex follows: False
+10:51:42 [DEBUG  ] paramiko.transport: === Key exchange agreements ===
+10:51:42 [DEBUG  ] paramiko.transport: Strict kex mode: True
+10:51:42 [DEBUG  ] paramiko.transport: Kex: curve25519-sha256@libssh.org
+10:51:42 [DEBUG  ] paramiko.transport: HostKey: ssh-ed25519
+10:51:42 [DEBUG  ] paramiko.transport: Cipher: aes128-ctr
+10:51:42 [DEBUG  ] paramiko.transport: MAC: hmac-sha2-256
+10:51:42 [DEBUG  ] paramiko.transport: Compression: none
+10:51:42 [DEBUG  ] paramiko.transport: === End of kex handshake ===
+10:51:43 [DEBUG  ] paramiko.transport: Resetting outbound seqno after NEWKEYS due to strict mode
+10:51:43 [DEBUG  ] paramiko.transport: kex engine KexCurve25519 specified hash_algo <built-in function openssl_sha256>
+10:51:43 [DEBUG  ] paramiko.transport: Switch to new keys ...
+10:51:43 [DEBUG  ] paramiko.transport: Resetting inbound seqno after NEWKEYS due to strict mode
+10:51:43 [DEBUG  ] paramiko.transport: Adding ssh-ed25519 host key for 35.238.233.131: b'ee8892b9f7915da51dc9bb0192991f9d'
+10:51:43 [DEBUG  ] paramiko.transport: Got EXT_INFO: {'server-sig-algs': b'ssh-ed25519,sk-ssh-ed25519@openssh.com,ssh-rsa,rsa-sha2-256,rsa-sha2-512,ssh-dss,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,sk-ecdsa-sha2-nistp256@openssh.com,webauthn-sk-ecdsa-sha2-nistp256@openssh.com'}
+10:51:44 [DEBUG  ] paramiko.transport: userauth is OK
+10:51:45 [INFO   ] paramiko.transport: Authentication (password) successful!
+10:51:45 [INFO   ] adk_app.tools.ssh_tools: SSH connected via password auth
+10:51:45 [DEBUG  ] paramiko.transport: [chan 0] Max packet in: 32768 bytes
+10:51:45 [DEBUG  ] paramiko.transport: Received global request "hostkeys-00@openssh.com"
+10:51:45 [DEBUG  ] paramiko.transport: Rejecting "hostkeys-00@openssh.com" global request from server.
+10:51:45 [DEBUG  ] paramiko.transport: [chan 0] Max packet out: 32768 bytes
+10:51:45 [DEBUG  ] paramiko.transport: Secsh channel 0 opened.
+10:51:46 [DEBUG  ] paramiko.transport: [chan 0] Sesch channel 0 request ok
+10:51:48 [DEBUG  ] paramiko.transport: [chan 0] EOF received (0)
+10:51:48 [DEBUG  ] paramiko.transport: [chan 0] EOF sent (0)
+10:51:48 [INFO   ] hana_sentinel.loop: Analysis script: success (21142 chars output)
+10:51:48 [INFO   ] hana_sentinel.loop: ═══ PHASE 2: Detecting and fixing errors ═══
+10:51:48 [INFO   ] hana_sentinel.loop: Errors found: 0
+10:51:48 [INFO   ] hana_sentinel.loop: No errors to fix — skipping schema discovery and fix phases
+10:51:48 [INFO   ] hana_sentinel.loop: ═══ PHASE 3: Running health checks ═══
+10:51:48 [INFO   ] hana_sentinel.loop:   Checking services...
+10:51:48 [WARNING] adk_app.tools.ssh_tools: gcloud auth issue: gcloud CLI not found. Install Google Cloud SDK.
+10:51:48 [WARNING] adk_app.tools.ssh_tools: gcloud SSH failed: [WinError 2] The system cannot find the file specified
+10:51:48 [WARNING] adk_app.tools.ssh_tools: gcloud IAP SSH failed: [WinError 2] The system cannot find the file specified
+10:51:48 [DEBUG  ] paramiko.transport: [chan 1] Max packet in: 32768 bytes
+10:51:49 [DEBUG  ] paramiko.transport: [chan 1] Max packet out: 32768 bytes
+10:51:49 [DEBUG  ] paramiko.transport: Secsh channel 1 opened.
+10:51:50 [DEBUG  ] paramiko.transport: [chan 1] Sesch channel 1 request ok
+10:51:50 [DEBUG  ] paramiko.transport: [chan 1] EOF received (1)
+10:51:50 [DEBUG  ] paramiko.transport: [chan 1] EOF sent (1)
+10:51:50 [INFO   ] hana_sentinel.loop:   Checking memory...
+10:51:50 [WARNING] adk_app.tools.ssh_tools: gcloud auth issue: gcloud CLI not found. Install Google Cloud SDK.
+10:51:50 [WARNING] adk_app.tools.ssh_tools: gcloud SSH failed: [WinError 2] The system cannot find the file specified
+10:51:50 [WARNING] adk_app.tools.ssh_tools: gcloud IAP SSH failed: [WinError 2] The system cannot find the file specified
+10:51:50 [DEBUG  ] paramiko.transport: [chan 2] Max packet in: 32768 bytes
+10:51:51 [DEBUG  ] paramiko.transport: [chan 2] Max packet out: 32768 bytes
+10:51:51 [DEBUG  ] paramiko.transport: Secsh channel 2 opened.
+10:51:51 [DEBUG  ] paramiko.transport: [chan 2] Sesch channel 2 request ok
+10:51:51 [DEBUG  ] paramiko.transport: [chan 2] EOF received (2)
+10:51:51 [DEBUG  ] paramiko.transport: [chan 2] EOF sent (2)
+10:51:51 [INFO   ] hana_sentinel.loop:   Checking disk usage...
+10:51:52 [WARNING] adk_app.tools.ssh_tools: gcloud auth issue: gcloud CLI not found. Install Google Cloud SDK.
+10:51:52 [WARNING] adk_app.tools.ssh_tools: gcloud SSH failed: [WinError 2] The system cannot find the file specified
+10:51:52 [WARNING] adk_app.tools.ssh_tools: gcloud IAP SSH failed: [WinError 2] The system cannot find the file specified
+10:51:52 [DEBUG  ] paramiko.transport: [chan 3] Max packet in: 32768 bytes
+10:51:53 [DEBUG  ] paramiko.transport: [chan 3] Max packet out: 32768 bytes
+10:51:53 [DEBUG  ] paramiko.transport: Secsh channel 3 opened.
+10:51:53 [DEBUG  ] paramiko.transport: [chan 3] Sesch channel 3 request ok
+10:51:53 [DEBUG  ] paramiko.transport: [chan 3] EOF received (3)
+10:51:53 [DEBUG  ] paramiko.transport: [chan 3] EOF sent (3)
+10:51:53 [INFO   ] hana_sentinel.loop:   Checking HDB storage paths...
+10:51:53 [WARNING] adk_app.tools.ssh_tools: gcloud auth issue: gcloud CLI not found. Install Google Cloud SDK.
+10:51:53 [WARNING] adk_app.tools.ssh_tools: gcloud SSH failed: [WinError 2] The system cannot find the file specified
+10:51:53 [WARNING] adk_app.tools.ssh_tools: gcloud IAP SSH failed: [WinError 2] The system cannot find the file specified
+10:51:53 [DEBUG  ] paramiko.transport: [chan 4] Max packet in: 32768 bytes
+10:51:54 [DEBUG  ] paramiko.transport: [chan 4] Max packet out: 32768 bytes
+10:51:54 [DEBUG  ] paramiko.transport: Secsh channel 4 opened.
+10:51:54 [DEBUG  ] paramiko.transport: [chan 4] Sesch channel 4 request ok
+10:51:54 [DEBUG  ] paramiko.transport: [chan 4] EOF received (4)
+10:51:54 [DEBUG  ] paramiko.transport: [chan 4] EOF sent (4)
+10:51:54 [INFO   ] hana_sentinel.loop:   Checking active alerts...
+10:51:54 [WARNING] adk_app.tools.ssh_tools: gcloud auth issue: gcloud CLI not found. Install Google Cloud SDK.
+10:51:54 [WARNING] adk_app.tools.ssh_tools: gcloud SSH failed: [WinError 2] The system cannot find the file specified
+10:51:54 [WARNING] adk_app.tools.ssh_tools: gcloud IAP SSH failed: [WinError 2] The system cannot find the file specified
+10:51:54 [DEBUG  ] paramiko.transport: [chan 5] Max packet in: 32768 bytes
+10:51:55 [DEBUG  ] paramiko.transport: [chan 5] Max packet out: 32768 bytes
+10:51:55 [DEBUG  ] paramiko.transport: Secsh channel 5 opened.
+10:51:56 [DEBUG  ] paramiko.transport: [chan 5] Sesch channel 5 request ok
+10:51:56 [DEBUG  ] paramiko.transport: [chan 5] EOF received (5)
+10:51:56 [DEBUG  ] paramiko.transport: [chan 5] EOF sent (5)
+10:51:56 [INFO   ] hana_sentinel.loop:   Checking connections...
+10:51:56 [WARNING] adk_app.tools.ssh_tools: gcloud auth issue: gcloud CLI not found. Install Google Cloud SDK.
+10:51:56 [WARNING] adk_app.tools.ssh_tools: gcloud SSH failed: [WinError 2] The system cannot find the file specified
+10:51:56 [WARNING] adk_app.tools.ssh_tools: gcloud IAP SSH failed: [WinError 2] The system cannot find the file specified
+10:51:56 [DEBUG  ] paramiko.transport: [chan 6] Max packet in: 32768 bytes
+10:51:56 [DEBUG  ] paramiko.transport: [chan 6] Max packet out: 32768 bytes
+10:51:56 [DEBUG  ] paramiko.transport: Secsh channel 6 opened.
+10:51:57 [DEBUG  ] paramiko.transport: [chan 6] Sesch channel 6 request ok
+10:51:57 [DEBUG  ] paramiko.transport: [chan 6] EOF received (6)
+10:51:57 [DEBUG  ] paramiko.transport: [chan 6] EOF sent (6)
+10:51:57 [INFO   ] hana_sentinel.loop:   Checking database info...
+10:51:57 [WARNING] adk_app.tools.ssh_tools: gcloud auth issue: gcloud CLI not found. Install Google Cloud SDK.
+10:51:57 [WARNING] adk_app.tools.ssh_tools: gcloud SSH failed: [WinError 2] The system cannot find the file specified
+10:51:57 [WARNING] adk_app.tools.ssh_tools: gcloud IAP SSH failed: [WinError 2] The system cannot find the file specified
+10:51:57 [DEBUG  ] paramiko.transport: [chan 7] Max packet in: 32768 bytes
+10:51:58 [DEBUG  ] paramiko.transport: [chan 7] Max packet out: 32768 bytes
+10:51:58 [DEBUG  ] paramiko.transport: Secsh channel 7 opened.
+10:51:58 [DEBUG  ] paramiko.transport: [chan 7] Sesch channel 7 request ok
+10:51:58 [DEBUG  ] paramiko.transport: [chan 7] EOF received (7)
+10:51:58 [DEBUG  ] paramiko.transport: [chan 7] EOF sent (7)
+10:51:58 [INFO   ] hana_sentinel.loop: Health checks: 7/7 succeeded
+10:51:58 [INFO   ] hana_sentinel.loop: ═══ PHASE 4: Pushing fixes to HDB ═══
+10:51:58 [INFO   ] hana_sentinel.loop: No fixes to push — script was already clean
+10:51:59 [INFO   ] hana_sentinel.loop: ═══ PHASE 5: Verifying changes ═══
+10:51:59 [WARNING] adk_app.tools.ssh_tools: gcloud auth issue: gcloud CLI not found. Install Google Cloud SDK.
+10:51:59 [WARNING] adk_app.tools.ssh_tools: gcloud SSH failed: [WinError 2] The system cannot find the file specified
+10:51:59 [WARNING] adk_app.tools.ssh_tools: gcloud IAP SSH failed: [WinError 2] The system cannot find the file specified
+10:51:59 [DEBUG  ] paramiko.transport: [chan 8] Max packet in: 32768 bytes
+10:52:00 [DEBUG  ] paramiko.transport: [chan 8] Max packet out: 32768 bytes
+10:52:00 [DEBUG  ] paramiko.transport: Secsh channel 8 opened.
+10:52:00 [DEBUG  ] paramiko.transport: [chan 8] Sesch channel 8 request ok
+10:52:00 [DEBUG  ] paramiko.transport: [chan 8] EOF received (8)
+10:52:00 [DEBUG  ] paramiko.transport: [chan 8] EOF sent (8)
+10:52:00 [WARNING] adk_app.tools.ssh_tools: gcloud auth issue: gcloud CLI not found. Install Google Cloud SDK.
+10:52:00 [WARNING] adk_app.tools.ssh_tools: gcloud SSH failed: [WinError 2] The system cannot find the file specified
+10:52:00 [WARNING] adk_app.tools.ssh_tools: gcloud IAP SSH failed: [WinError 2] The system cannot find the file specified
+10:52:00 [DEBUG  ] paramiko.transport: [chan 9] Max packet in: 32768 bytes
+10:52:01 [DEBUG  ] paramiko.transport: [chan 9] Max packet out: 32768 bytes
+10:52:01 [DEBUG  ] paramiko.transport: Secsh channel 9 opened.
+10:52:02 [DEBUG  ] paramiko.transport: [chan 9] Sesch channel 9 request ok
+10:52:02 [DEBUG  ] paramiko.transport: [chan 9] EOF received (9)
+10:52:02 [DEBUG  ] paramiko.transport: [chan 9] EOF sent (9)
+10:52:02 [INFO   ] hana_sentinel.loop: Verification: 2/2 checks passed
+10:52:02 [INFO   ] hana_sentinel.loop: ═══ PHASE 6: Learning and generating report ═══
+10:52:02 [INFO   ] adk_app.report_generator: Report generated: C:\Users\I587436\Downloads\HanaS\hana_sentinel\reports\hana_sentinel_HXE_20260212_105202.pdf (4651 bytes)
+10:52:02 [INFO   ] hana_sentinel.loop: Report generated: C:\Users\I587436\Downloads\HanaS\hana_sentinel\reports\hana_sentinel_HXE_20260212_105202.pdf
+10:52:02 [INFO   ] hana_sentinel.loop: Cycle #1 complete — Status: HEALTHY
