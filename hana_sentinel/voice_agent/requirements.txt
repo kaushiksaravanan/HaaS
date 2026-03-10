@@ -1,0 +1,7 @@
+livekit-agents>=1.4.0
+livekit-plugins-silero>=1.0.0
+livekit-api>=1.0.0
+python-dotenv
+requests
+SpeechRecognition>=3.10.0
+edge-tts>=6.1.0

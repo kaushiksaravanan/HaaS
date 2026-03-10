@@ -126,6 +126,7 @@ class AgentChatRequest(BaseModel):
     admin_mode: bool = False
     use_browser: bool = False  # When True, always browse SAP docs for answers
     autonomous_browser: bool = False  # When True, use browser-use agent (like Manus)
+    voice_mode: bool = False  # When True, return voice-friendly summaries instead of markdown
 
 
 # ──────────────────────────────────────────────
@@ -690,7 +691,8 @@ def agent_chat(req: AgentChatRequest):
         req.message,
         admin_mode=req.admin_mode,
         use_browser=req.use_browser,
-        autonomous_browser=req.autonomous_browser
+        autonomous_browser=req.autonomous_browser,
+        voice_mode=req.voice_mode,
     )
     response_text = result.get("response", "")
     sources = result.get("sources", [])
@@ -747,21 +749,31 @@ def _extract_command_with_llm(user_text: str) -> Optional[str]:
             return None
 
         system_prompt = (
-            "You are an expert Linux/SAP HANA administrator. "
-            "First decide: is the user asking a KNOWLEDGE QUESTION or requesting a COMMAND to run?\n\n"
+            "You are an expert Linux/SAP HANA administrator managing a LIVE production server. "
+            "The user is an ops engineer talking to you via voice. They want LIVE system data, not definitions.\n\n"
+            "First decide: is the user asking a THEORETICAL KNOWLEDGE QUESTION or wanting to CHECK the LIVE system?\n\n"
             "KNOWLEDGE QUESTIONS (return NO_COMMAND):\n"
-            "  - Questions about concepts, configuration, architecture: 'reverse proxy in hana?', 'what is HANA replication?'\n"
-            "  - SAP Note lookups: 'sap note 2222222', 'sap notes about memory'\n"
-            "  - Best practices, troubleshooting theory: 'how does HANA backup work?'\n"
-            "  - General knowledge: 'explain index server', 'difference between row and column store'\n\n"
-            "COMMANDS (return the shell command):\n"
-            "  - Explicit commands: 'ls -ltr', 'df -h', 'run uptime'\n"
-            "  - Actionable requests to check live system state: 'check disk usage', 'show running processes'\n"
-            "  - System administration tasks: 'restart indexserver', 'list files in /hana/shared'\n\n"
+            "  - Pure theory/concepts: 'what is HANA replication?', 'explain column store'\n"
+            "  - SAP Note lookups: 'sap note 2222222'\n"
+            "  - Best practices/architecture: 'how does HANA backup work?'\n\n"
+            "LIVE SYSTEM CHECKS (return the shell command):\n"
+            "  - Explicit: 'ls -ltr', 'df -h', 'run uptime'\n"
+            "  - Questions about CURRENT state → these are commands, NOT knowledge:\n"
+            "    'what is the server uptime' → uptime\n"
+            "    'what is the uptime' → uptime\n"
+            "    'how much disk space' → df -h\n"
+            "    'how much memory is used' → free -h\n"
+            "    'what processes are running' → ps aux\n"
+            "    'is the server running' → uptime\n"
+            "    'check cpu' → top -bn1 | head -20\n"
+            "    'server status' → uptime\n"
+            "  - System admin tasks: 'restart indexserver', 'list files in /hana/shared'\n\n"
+            "IMPORTANT: When the user mentions uptime, disk, memory, cpu, process, load, " 
+            "swap, space, running, status of a SERVER — they want the LIVE data, not a definition.\n\n"
             "Rules:\n"
+            "- If LIVE SYSTEM CHECK → return ONLY the raw shell command, no backticks, no explanation\n"
             "- If KNOWLEDGE QUESTION → return exactly: NO_COMMAND\n"
-            "- If COMMAND → return ONLY the raw shell command, no backticks, no explanation\n"
-            "- When in doubt, prefer NO_COMMAND over guessing a wrong command"
+            "- When in doubt about system state questions, prefer running the command"
         )
         prompt = f"User message: {user_text.strip()}"
 
@@ -1121,7 +1133,35 @@ SET ('trace', 'maxfiles') = '20' WITH RECONFIGURE;
 """
 
 
-def generate_agent_response(message: str, admin_mode: bool = False, use_browser: bool = False, autonomous_browser: bool = False) -> dict:
+def _summarize_output_for_voice(command: str, output: str) -> str:
+    """Use the LLM to create a brief spoken-word summary of command output."""
+    try:
+        from .aicore_client import get_aicore_client
+        client = get_aicore_client()
+        if not client.is_configured():
+            return None
+        system_prompt = (
+            "You are a voice assistant summarizing Linux/SAP HANA command output for a spoken response. "
+            "Be BRIEF (2-4 sentences max). Report key numbers and status. "
+            "Do NOT say 'the output shows' or 'the command returned'. "
+            "Speak naturally as if reporting live system status to an engineer. "
+            "Example: 'The server has been up for 45 days. Load average is 0.25. Two users are logged in.'"
+        )
+        prompt = f"Command: {command}\nOutput:\n{output[:2000]}\n\nSummarize this for a spoken voice response:"
+        summary = client.generate_text(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=0.2,
+            max_tokens=200,
+        )
+        if summary and summary.strip():
+            return summary.strip()
+    except Exception as exc:
+        logger.warning(f"Voice summary failed: {exc}")
+    return None
+
+
+def generate_agent_response(message: str, admin_mode: bool = False, use_browser: bool = False, autonomous_browser: bool = False, voice_mode: bool = False) -> dict:
     """Generate agent response based on user message.
     Supports direct command execution and knowledge browsing.
 
@@ -1130,6 +1170,7 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
         admin_mode: If True, allow unrestricted command execution
         use_browser: If True, always browse web for answers
         autonomous_browser: If True, use browser-use agent for autonomous browsing (like Manus)
+        voice_mode: If True, return voice-friendly summaries instead of markdown
 
     Returns:
         {"response": str, "sources": list} — sources is empty for non-browse responses
@@ -1154,24 +1195,91 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
 
     has_shell_command = any(_starts_with_command(msg_lower.strip(), cmd) for cmd in shell_commands)
 
+    # Detect if the question mentions a system-checkable concept even if phrased as a question
+    system_check_keywords = [
+        "uptime", "disk", "memory", "cpu", "process", "load", "usage",
+        "running", "disk space", "free space", "swap", "filesystem",
+        "mount", "partition", "service", "port", "network", "connection",
+        "backup status", "hana status", "instance", "restart",
+    ]
+    mentions_system_check = any(kw in msg_lower for kw in system_check_keywords)
+
     def _resp(text, sources=None):
         return {"response": text, "sources": sources or []}
 
-    # Check for knowledge questions FIRST (before admin mode tries to extract commands)
-    # This ensures "SAP Note 222221" goes to browser, not shell
-    if _is_knowledge_question(msg_lower) and not has_shell_command:
-        try:
-            return _browse_and_answer(message, use_autonomous_browser=autonomous_browser)
-        except Exception as exc:
-            logger.warning(f"Browse failed for knowledge question: {exc}")
-            return _answer_with_llm(message)
+    # ── Read-only safety filter ──────────────────────────────
+    # Block destructive/write commands regardless of admin_mode.
+    # Only read-only inspection commands are allowed via voice/chat.
+    _DANGEROUS_PATTERNS = [
+        r'\brm\b', r'\brmdir\b', r'\bunlink\b',
+        r'\bmkdir\b', r'\btouch\b', r'\bchmod\b', r'\bchown\b', r'\bchgrp\b',
+        r'\bmv\b', r'\bcp\b',
+        r'\bdd\b', r'\bmkfs\b', r'\bfdisk\b', r'\bparted\b',
+        r'\bkill\b', r'\bkillall\b', r'\bpkill\b',
+        r'\breboot\b', r'\bshutdown\b', r'\bpoweroff\b', r'\bhalt\b', r'\binit\b',
+        r'\bapt\b', r'\byum\b', r'\bdnf\b', r'\bzypper\b', r'\bpip\b',
+        r'\bcurl\b.*-[dXP]', r'\bwget\b',  # curl with POST/PUT/DELETE, wget downloads
+        r'\bsed\b.*-i', r'\btruncate\b',  # in-place sed edits
+        r'\btee\b', r'>',  # redirections that write files
+        r'\bDROP\b', r'\bDELETE\b', r'\bTRUNCATE\b', r'\bALTER\b', r'\bINSERT\b', r'\bUPDATE\b', r'\bCREATE\b',
+        r'\bHDB\s+stop\b', r'\bHDB\s+kill\b',
+        r'\bStopSystem\b', r'\bStopService\b', r'\bRestartService\b', r'\bRestartSystem\b',
+    ]
 
+    def _is_read_only(cmd: str) -> bool:
+        """Return True if the command is safe (read-only)."""
+        import re as _re
+        for pat in _DANGEROUS_PATTERNS:
+            if _re.search(pat, cmd, _re.IGNORECASE):
+                return False
+        return True
+
+    def _reject_write(cmd: str):
+        """Return a rejection response for blocked commands."""
+        if voice_mode:
+            return _resp(f"Sorry, the command {cmd.split()[0]} is blocked because it can modify the system. I can only run read-only commands.")
+        return _resp(f"**Blocked:** `{cmd}`\n\nThis command is not allowed. Only read-only inspection commands are permitted via this interface.")
+
+    # In admin mode, let the LLM decide first — it can distinguish
+    # "what is the server uptime?" (command) from "what is HANA replication?" (knowledge)
     if admin_mode:
         # Let the LLM decide if this is a command or a knowledge question
         command = _extract_command_with_llm(message)
 
+        if not command and mentions_system_check:
+            # LLM said NO_COMMAND but user mentioned system keywords like uptime/disk/memory
+            # Fall back to a direct command mapping — they almost certainly want live data
+            _system_keyword_commands = {
+                "uptime": "uptime",
+                "disk": "df -h",
+                "disk space": "df -h",
+                "free space": "df -h",
+                "memory": "free -h",
+                "swap": "free -h",
+                "cpu": "top -bn1 | head -20",
+                "load": "uptime",
+                "process": "ps aux --sort=-%mem | head -20",
+                "running": "uptime",
+                "filesystem": "df -h",
+                "mount": "mount | grep -v cgroup",
+                "partition": "df -h",
+                "port": "ss -tlnp",
+                "network": "ss -tlnp",
+                "connection": "ss -tlnp",
+                "hana status": "sapcontrol -nr 00 -function GetProcessList",
+                "instance": "sapcontrol -nr 00 -function GetProcessList",
+                "backup status": "ls -ltr /hana/backup/ 2>/dev/null || echo 'Backup dir not found'",
+                "usage": "df -h; free -h",
+                "service": "sapcontrol -nr 00 -function GetProcessList",
+            }
+            for kw, cmd in _system_keyword_commands.items():
+                if kw in msg_lower:
+                    command = cmd
+                    logger.info(f"System keyword fallback: '{kw}' → {cmd}")
+                    break
+
         if not command:
-            # LLM says it's NOT a command — try answering as a knowledge question
+            # Truly a knowledge question — answer with LLM
             try:
                 browse_answer = _browse_and_answer(message, use_autonomous_browser=autonomous_browser)
                 if browse_answer.get("response") and "couldn't find" not in browse_answer.get("response", ""):
@@ -1184,19 +1292,99 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
         if not executor.is_configured():
             return _resp("Error: Remote execution server not configured. Check REMOTE_EXEC_URL and REMOTE_EXEC_API_KEY in .env")
 
+        if not _is_read_only(command):
+            return _reject_write(command)
+
         result = executor.execute_command(command, timeout=60, admin_override=True)
 
         if result.get("status") == "success" or result.get("exit_code") == 0:
             output = result.get("output", "").strip()
             if output:
+                if voice_mode:
+                    summary = _summarize_output_for_voice(command, output)
+                    if summary:
+                        return _resp(summary)
+                    return _resp(f"Ran {command}. Result: {output[:500]}")
                 return _resp(f"**Admin Command:** `{command}`\n\n**Output:**\n```\n{output}\n```")
-            return _resp(f"**Admin Command:** `{command}`\n\nCommand executed successfully (no output).")
+            msg = f"Command {command} executed successfully with no output." if voice_mode else f"**Admin Command:** `{command}`\n\nCommand executed successfully (no output)."
+            return _resp(msg)
 
         error = result.get("error", "") or result.get("output", "")
+        if voice_mode:
+            return _resp(f"The command {command} failed. Error: {error[:300]}")
         return _resp(f"**Admin Command:** `{command}`\n\n**Error:**\n```\n{error}\n```")
+
+    # Non-admin mode: check for knowledge questions FIRST
+    # This ensures "SAP Note 222221" goes to browser, not shell
+    if _is_knowledge_question(msg_lower) and not has_shell_command and not mentions_system_check:
+        try:
+            return _browse_and_answer(message, use_autonomous_browser=autonomous_browser)
+        except Exception as exc:
+            logger.warning(f"Browse failed for knowledge question: {exc}")
+            return _answer_with_llm(message)
+
+    # System check questions (e.g. "what is the server uptime") — map to commands
+    if mentions_system_check and not has_shell_command and not is_command_request:
+        _system_keyword_commands = {
+            "uptime": "uptime",
+            "disk": "df -h",
+            "disk space": "df -h",
+            "free space": "df -h",
+            "memory": "free -h",
+            "swap": "free -h",
+            "cpu": "top -bn1 | head -20",
+            "load": "uptime",
+            "process": "ps aux --sort=-%mem | head -20",
+            "running": "uptime",
+            "filesystem": "df -h",
+            "mount": "mount | grep -v cgroup",
+            "partition": "df -h",
+            "port": "ss -tlnp",
+            "network": "ss -tlnp",
+            "connection": "ss -tlnp",
+            "hana status": "sapcontrol -nr 00 -function GetProcessList",
+            "instance": "sapcontrol -nr 00 -function GetProcessList",
+            "backup status": "ls -ltr /hana/backup/ 2>/dev/null || echo 'Backup dir not found'",
+            "usage": "df -h; free -h",
+            "service": "sapcontrol -nr 00 -function GetProcessList",
+            "restart": "uptime",
+        }
+        sys_command = None
+        for kw, cmd in _system_keyword_commands.items():
+            if kw in msg_lower:
+                sys_command = cmd
+                logger.info(f"Non-admin system keyword: '{kw}' → {cmd}")
+                break
+        if not sys_command:
+            sys_command = _extract_command_with_llm(message)
+        if sys_command:
+            if not _is_read_only(sys_command):
+                return _reject_write(sys_command)
+            executor = get_http_executor()
+            if executor.is_configured():
+                result = executor.execute_command(sys_command, timeout=60, admin_override=True)
+                if result.get("status") == "success" or result.get("exit_code") == 0:
+                    output = result.get("output", "").strip()
+                    if output:
+                        if voice_mode:
+                            summary = _summarize_output_for_voice(sys_command, output)
+                            if summary:
+                                return _resp(summary)
+                            return _resp(f"Ran {sys_command}. Result: {output[:500]}")
+                        return _resp(f"**Command:** `{sys_command}`\n\n**Output:**\n```\n{output}\n```")
+                    msg = f"Command {sys_command} ran with no output." if voice_mode else f"**Command:** `{sys_command}`\n\nCommand executed successfully (no output)."
+                    return _resp(msg)
+                else:
+                    error = result.get("error", "") or result.get("output", "")
+                    if voice_mode:
+                        return _resp(f"The command {sys_command} failed. Error: {error[:300]}")
+                    return _resp(f"**Command:** `{sys_command}`\n\n**Error:**\n```\n{error}\n```")
 
     if is_command_request or has_shell_command:
         command = _extract_command_heuristic(message, msg_lower)
+
+        if not _is_read_only(command):
+            return _reject_write(command)
 
         # Execute the command
         executor = get_http_executor()
@@ -1215,11 +1403,19 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
         if result.get("status") == "success" or result.get("exit_code") == 0:
             output = result.get("output", "").strip()
             if output:
+                if voice_mode:
+                    summary = _summarize_output_for_voice(command, output)
+                    if summary:
+                        return _resp(summary)
+                    return _resp(f"Ran {command}. Result: {output[:500]}")
                 return _resp(f"**Command:** `{command}`\n\n**Output:**\n```\n{output}\n```")
             else:
-                return _resp(f"**Command:** `{command}`\n\nCommand executed successfully (no output).")
+                msg = f"Command {command} executed successfully with no output." if voice_mode else f"**Command:** `{command}`\n\nCommand executed successfully (no output)."
+                return _resp(msg)
         else:
             error = result.get("error", "") or result.get("output", "")
+            if voice_mode:
+                return _resp(f"The command {command} failed. Error: {error[:300]}")
             return _resp(f"**Command:** `{command}`\n\n**Error:**\n```\n{error}\n```")
 
     # Health/status check
@@ -1260,16 +1456,26 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
     else:
         llm_command = _extract_command_with_llm(message)
         if llm_command:
+            if not _is_read_only(llm_command):
+                return _reject_write(llm_command)
             executor = get_http_executor()
             if executor.is_configured():
                 result = executor.execute_command(llm_command, timeout=60, admin_override=True)
                 if result.get("status") == "success" or result.get("exit_code") == 0:
                     output = result.get("output", "").strip()
                     if output:
+                        if voice_mode:
+                            summary = _summarize_output_for_voice(llm_command, output)
+                            if summary:
+                                return _resp(summary)
+                            return _resp(f"Ran {llm_command}. Result: {output[:500]}")
                         return _resp(f"**Command:** `{llm_command}`\n\n**Output:**\n```\n{output}\n```")
-                    return _resp(f"**Command:** `{llm_command}`\n\nCommand executed successfully (no output).")
+                    msg = f"Command {llm_command} executed successfully with no output." if voice_mode else f"**Command:** `{llm_command}`\n\nCommand executed successfully (no output)."
+                    return _resp(msg)
                 else:
                     error = result.get("error", "") or result.get("output", "")
+                    if voice_mode:
+                        return _resp(f"The command {llm_command} failed. Error: {error[:300]}")
                     return _resp(f"**Command:** `{llm_command}`\n\n**Error:**\n```\n{error}\n```")
 
         # Try answering as a general question via LLM before showing welcome
@@ -2284,6 +2490,39 @@ async def websocket_instance_status(websocket: WebSocket):
                 })
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+
+# ──────────────────────────────────────────────
+# LiveKit Voice Agent — Token Endpoint
+# ──────────────────────────────────────────────
+class LiveKitTokenRequest(BaseModel):
+    identity: str = "user"
+    room: str = "hana-sentinel-voice"
+
+@app.post("/api/v1/voice/token")
+def get_livekit_token(req: LiveKitTokenRequest):
+    """Generate a LiveKit room token for the voice frontend."""
+    try:
+        from livekit.api import AccessToken, VideoGrants
+    except ImportError:
+        raise HTTPException(status_code=501, detail="livekit-api not installed. Run: pip install livekit-api")
+
+    api_key = os.getenv("LIVEKIT_API_KEY")
+    api_secret = os.getenv("LIVEKIT_API_SECRET")
+    livekit_url = os.getenv("LIVEKIT_URL", "")
+
+    if not api_key or not api_secret:
+        raise HTTPException(status_code=500, detail="LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set")
+
+    token = AccessToken(api_key, api_secret) \
+        .with_identity(req.identity) \
+        .with_grants(VideoGrants(room_join=True, room=req.room))
+
+    return {
+        "token": token.to_jwt(),
+        "url": livekit_url,
+        "room": req.room,
+    }
 
 
 # ──────────────────────────────────────────────

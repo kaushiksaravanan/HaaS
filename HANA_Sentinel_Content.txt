@@ -1,0 +1,1029 @@
+ 
+ 
+ 
+ 
+ 
+HANA SENTINEL 
+Autonomous Policy-Driven Multi-Agent AI 
+for SAP HANA Operations 
+ 
+Product Requirements Document 
+Google x SAP Hackathon 2026 
+ 
+Version 2.0  |  February 2026 
+CONFIDENTIAL 
+  
+1. Vision Statement 
+An autonomous, explainable, policy-gated multi-agent system that transforms SAP HANA 
+operations from reactive firefighting into proactive, self-healing infrastructure. Powered by 
+Google Vertex AI, LangGraph orchestration, and a novel Risk Budget governance engine. 
+ 
+2. Problem Statement and Market Context 
+SAP HANA powers 87% of total global commerce through SAP's enterprise customer base. Yet 
+the operational burden of maintaining HANA systems remains stubbornly manual. SAP Basis 
+administrators perform daily routines that are well-defined, repetitive, and prime candidates for 
+intelligent automation: checking system health, reviewing alerts, verifying backups, analyzing 
+expensive SQL statements, monitoring capacity, and responding to security advisories. 
+The problem breaks into four dimensions. First, reactive operations: teams discover issues from 
+EarlyWatch Alert reports (delivered weekly as PDFs) or after users report problems, not before 
+impact occurs. Second, fragmented tooling: SAP Landscape Management (mainstream 
+maintenance ending December 2027), SAP Automation Pilot (primarily HANA Cloud, not on-
+premise), and SAP Solution Manager (also end-of-life 2027) leave significant gaps. Third, 
+knowledge silos: remediation expertise lives in the heads of senior Basis administrators, 
+encoded in scattered SAP Notes and tribal knowledge rather than actionable automation. 
+Fourth, compliance burden: SOX, GDPR, and now the EU AI Act demand auditable, explainable 
+operations, making ad-hoc automation insufficient without governance frameworks. 
+Existing solutions like Avantra provide ML-based anomaly detection but stop short of 
+autonomous remediation. SAP's own Joule copilot focuses on conversational assistance rather 
+than operational autonomy. No solution today combines detection, diagnosis, explainable 
+remediation, policy-gated execution, and continuous learning in a unified multi-agent 
+architecture for SAP HANA. 
+ 
+Quantified Pain Points 
+Metric Current State Target with HANA Sentinel 
+MTTR for HANA incidents ~47 minutes <8 minutes (83% reduction) 
+Time on routine Basis tasks 60-70% of FTE <15% of FTE 
+EWA report review turnaround 2-5 business days <1 hour (automated) 
+Backup failure detection Next-morning check Real-time (<30 seconds) 
+Security drift detection Monthly/quarterly audit Continuous (every 15 min) 
+Security patch assessment Manual SAP Note review Auto-parsed within 4 hours of 
+Patch Day 
+Post-incident documentation Manual, 30-60 min Auto-generated X-Fix report 
+ 
+  
+3. Real-World Threat Context: SAP Security Patch 
+Day, January 2026 
+On January 13, 2026, SAP released 17 new security notes addressing critical vulnerabilities 
+across enterprise SAP environments. This release included four HotNews vulnerabilities with 
+CVSS ratings up to 9.9, four High priority issues, seven Medium priority fixes, and two Low 
+priority updates. The patches affect SAP S/4HANA, SAP HANA database, SAP NetWeaver, 
+SAP Wily Introscope, and various application components. This real-world event directly 
+validates HANA Sentinel's Security Agent and Browser-Use Agent capabilities. 
+ 
+Critical Vulnerabilities (HotNews, CVSS 9.0+) 
+SAP Note CVE CVSS Component Vulnerability 
+3687749 CVE-2026-
+0501 
+9.9 S/4HANA General 
+Ledger 
+SQL Injection via RFC function 
+module using ADBC framework. Low-
+privilege users can execute arbitrary 
+SQL, full system compromise 
+possible. 
+3668679 CVE-2026-
+0500 
+9.6 Wily Introscope 
+Enterprise Mgr 
+Remote Code Execution via malicious 
+JNLP files. Unauthenticated attacker, 
+user interaction required. Complete 
+system takeover. 
+3694242 CVE-2026-
+0498 
+9.1 S/4HANA (Private 
+Cloud/On-Prem) 
+Code Injection allowing admin-
+privilege attackers to modify program 
+source code, leading to OS command 
+execution. 
+3697979 CVE-2026-
+0491 
+9.1 Landscape 
+Transformation (SLT) 
+Same code injection as above, 
+shipped as separate DMIS add-on. 
+Affects standalone SLT servers. 
+ 
+High Priority Vulnerabilities (CVSS 8.0+) 
+SAP Note CVE CVSS Component Vulnerability 
+3691059 CVE-2026-
+0492 
+8.8 SAP HANA Database Privilege Escalation: authenticated 
+users can switch to another user, 
+potentially gaining admin access. 
+Total compromise of confidentiality, 
+integrity, availability. 
+3675151 CVE-2026-
+0507 
+8.4 AS ABAP / NW 
+RFCSDK 
+OS Command Injection allowing high-
+privileged attackers on adjacent 
+networks to execute arbitrary OS 
+commands. 
+3688703 CVE-2026-
+0506 
+8.1 NW AS ABAP 
+Platform 
+Missing Authorization Check enabling 
+low-privilege users to bypass controls 
+and perform unauthorized actions. 
+3565506 CVE-2026-
+0511 
+8.1 Fiori (Intercompany 
+Balance) 
+Missing Authorization plus CSRF plus 
+Information Disclosure across three 
+CVEs. 
+ 
+How HANA Sentinel Addresses January 2026 Patch Day 
+The January 2026 Patch Day demonstrates exactly the problem HANA Sentinel solves. Within 
+hours of SAP publishing security notes, the system performs the following automated workflow: 
+• Browser-Use Agent navigates to SAP Support Portal and extracts the full list of security 
+notes, CVE identifiers, affected components, and CVSS scores from the Patch Day 
+bulletin page. 
+• RAG Agent ingests the extracted security notes into the Vertex AI knowledge corpus, 
+making them immediately queryable by all operational agents. 
+• Security Agent cross-references affected components (especially SAP Note 3691059 for 
+HANA privilege escalation CVE-2026-0492) against the managed HANA landscape, 
+generating an Action Certificate for each applicable patch. 
+• For CVE-2026-0492 (HANA Privilege Escalation, CVSS 8.8), the Security Agent checks 
+current HANA version, identifies exposed authentication boundaries, and generates an 
+X-Fix report recommending immediate patching with blast radius analysis. 
+• Each remediation proposal flows through the Policy Engine and Risk Budget before 
+reaching the Basis team for approval, with the X-Fix report providing full context for 
+informed decision-making. 
+ 
+  
+4. System Architecture and Multi-Agent Control Plane 
+Architecture Overview (ASCII) 
++-----------------------------------------------------------------------+ 
+|                    HANA SENTINEL CONTROL PLANE                         | 
+|  +--------------+  +--------------+  +-----------+  +---------------+ | 
+|  |   Policy     |  |  Risk Budget |  | Action    |  | Audit/Replay  | | 
+|  |   Engine     |  |  Engine      |  | Certifier |  | Engine        | | 
+|  |   (OPA/Rego) |  |              |  |           |  |               | | 
+|  +------+-------+  +------+-------+  +-----+-----+  +------+--------+ | 
+|         +------------------+-----------------+---------------+         | 
+|                            ^ Governance Bus                            | 
+|----------------------------+------------------------------------------| 
+|                   +--------+--------+                                 | 
+|                   |   SUPERVISOR     |    LangGraph Orchestrator       | 
+|                   |   AGENT          |    (Gemini 2.5 Flash)           | 
+|                   +-------+---------+                                 | 
+|       +------+--------+---+---+--------+--------+---------+           | 
+|  +----v--++--v---++---v--++--v---++---v--++---v--++-----v----+         | 
+|  |Health ||Backup||Recov-||SQL   ||Capac-||Secur-||Browser-  |         | 
+|  |Agent  ||Agent ||ery   ||Tuning||ity   ||ity   ||Use Agent |         | 
+|  +---+---++--+---++--+---++--+---++--+---++--+---++----+-----+         | 
+|      +-------+-------+-------+-------+-------+---------+              | 
+|                              |                                        | 
+|       +----------------------+----------------------+                 | 
+|       |              RAG AGENT                      |                 | 
+|       |  Vertex AI RAG Engine + SAP Knowledge       |                 | 
+|       +---------------------------------------------+                 | 
+|-----------------------------------------------------------------------| 
+|  Event Bus (Pub/Sub)  |  State Store (PostgreSQL)  |  Metrics (OTEL)  | 
++----------------------+----------------------------+------------------+ 
+           |                                                    |         
+    +------v------+                                    +-------v-------+  
+    |  SAP HANA   |                                    |  GCP Services |  
+    |  (hdbcli +  |                                    |  (Vertex AI,  |  
+    |  sapcontrol)|                                    |  BigQuery,    |  
+    +-------------+                                    |  Cloud Run)   |  
+                                                       +---------------+  
+ 
+Why LangGraph as the Orchestration Framework 
+LangGraph (GA May 2025, MIT-licensed, 400+ production deployments at companies like 
+LinkedIn, Uber, and Elastic) models AI workflows as directed cyclic graphs with explicit state 
+machines. This is critical for SAP operations because HANA remediation workflows are 
+inherently stateful, branching, and require checkpointing. 
+• Reducer-driven state schemas using Python Annotated types prevent data loss in multi-
+agent environments 
+• Checkpointing via PostgresSaver enables time-travel debugging and fault-tolerant 
+execution 
+• interrupt() function provides native human-in-the-loop support, pausing execution at 
+policy gates 
+• Sub-graph composition allows each specialized agent to be its own LangGraph graph, 
+composed into the supervisor's orchestration graph 
+• Native Vertex AI integration via agent_engines.LanggraphAgent class for managed 
+deployment on Google Cloud 
+ 
+LangGraph State Schema 
+class HANAOperationState(TypedDict): 
+    messages: Annotated[list, add_messages] 
+    incident_id: str 
+    system_id: str 
+    risk_score: int 
+    risk_budget_remaining: int 
+    action_certificate: dict | None 
+    approval_status: Literal['pending','approved','rejected','auto'] 
+    execution_status: Literal['idle','executing','completed','failed','rolled_back'] 
+    xfix_explanation: dict | None 
+    audit_trail: list[dict] 
+ 
+Policy Engine (OPA/Rego) 
+The control plane uses Open Policy Agent (OPA), a CNCF-graduated project with sub-
+millisecond policy evaluation, as its decision engine. Policies are written in Rego and enforced 
+before every agent action. The engine evaluates risk tiers (low/medium/high/critical), checks 
+budget sufficiency, enforces maintenance windows for critical actions, and prevents agents from 
+approving their own actions (separation of duties). 
+ 
+  
+5. Agent Risk Budget (Novel Governance Mechanism) 
+HANA Sentinel introduces the Agent Risk Budget, adapted from Google's SRE error budget 
+model. Just as SRE teams have an error budget (1 minus SLO) that permits controlled risk-
+taking while protecting reliability, each HANA Sentinel deployment operates with a risk budget 
+that governs cumulative autonomous action. 
+Every agent action consumes risk points from a shared budget based on a 5x5 risk matrix 
+(Likelihood x Impact). The budget replenishes over a rolling 24-hour window, with trust 
+multipliers rewarding successful operations and penalty mechanisms reducing capacity after 
+incidents. 
+ 
+Risk Scoring for SAP HANA Operations 
+Operation 
+Category 
+Likelihood Impact Risk 
+Points 
+Example 
+Read-only 
+monitoring 
+1 (Rare) 1 (Negligible) 1 Query M_SERVICES status 
+Log/trace analysis 1 2 (Minor) 2 Parse expensive statement trace 
+Configuration read 1 1 1 Read M_INIFILE_CONTENTS 
+Parameter change 2 (Unlikely) 3 (Moderate) 6 Adjust trace level 
+global.ini 
+modification 
+2 3 (Moderate) 6 Add basepath_logbackup entry 
+Backup execution 2 3 6 Trigger differential backup 
+Service restart 3 (Moderate) 4 (Major) 12 Restart indexserver 
+Security change 2 4 (Major) 8 Revoke excessive privilege 
+Data modification 3 5 (Severe) 15 Table reorganization 
+Failover trigger 4 (Likely) 5 (Severe) 20 System replication takeover 
+ 
+Budget Thresholds and Behavioral Gates 
+Budget Consumed Agent Behavior Governance Mode 
+0-50% Fully autonomous for pre-approved 
+actions 
+HOOTL (Human-out-of-the-
+loop) 
+50-75% Autonomous with enhanced logging and 
+explanation 
+HOTL (Human-on-the-loop) 
+75-90% All actions require async human review HITL-async 
+90-100% All actions require synchronous human 
+approval 
+HITL-sync 
+>100% Read-only mode; only monitoring 
+permitted 
+Frozen 
+ 
+Trust multiplier: Seven consecutive days without incidents increases the daily budget by 10% 
+(compounding, capped at 150% of baseline). A severity-1 incident resets the multiplier and 
+reduces budget to 75% of baseline for 48 hours. 
+ 
+  
+6. Action Certificates (Signed Pre-Approved 
+Remediation Plans) 
+Every non-trivial agent action in HANA Sentinel requires an Action Certificate, a digitally signed 
+document that fully describes what will be done, why, what could go wrong, and how to undo it. 
+This concept draws from Terraform's plan/apply model, AWS Systems Manager runbooks, and 
+Columbia University's research on Autonomy Certificates (Feng et al., 2025). 
+Action Certificates serve three purposes: they enforce pre-execution review, they create an 
+immutable audit record for compliance, and they enable the replay capability by fully capturing 
+decision context. 
+ 
+Certificate Structure 
+Field Group Fields Purpose 
+Identity certificate_id, version, status, 
+created_by_agent, digital_signature, 
+expires_at 
+Tracking, authentication, 
+lifecycle 
+Target system_id, target_component What system and component is 
+affected 
+Action action_type, action_description, 
+action_parameters, execution_steps 
+Exactly what will be done 
+Justification (WHY) trigger_event, root_cause_hypothesis, 
+confidence_level, alternatives_considered, 
+supporting_evidence, rag_sources 
+Evidence-based reasoning 
+chain 
+Risk Assessment risk_score (1-25), likelihood, impact, 
+blast_radius, risk_budget_cost 
+Quantified risk and affected 
+scope 
+Pre/Post Conditions preconditions[], postconditions[] Validation before and after 
+execution 
+Rollback rollback_steps, auto_rollback_triggers, 
+estimated_rollback_time, data_loss_risk 
+Full reversal plan 
+Approval approval_required, approved_by, approved_at, 
+approval_notes 
+Human governance record 
+ 
+  
+7. Specialized Agent Specifications 
+Each agent follows the single-responsibility principle: one agent, one domain, clear input/output 
+contracts. Agents communicate through structured intents over Google Cloud Pub/Sub (not 
+natural language) to reduce hallucination risk and latency. 
+ 
+7.1 Health Monitor Agent 
+Continuous monitoring of SAP HANA system health via M_* monitoring views. Generates 
+structured health assessments every 60 seconds covering services, memory, disk, CPU, alerts, 
+and system replication. 
+Key HANA interfaces: M_SERVICES, M_HOST_RESOURCE_UTILIZATION, 
+M_SERVICE_MEMORY, STATISTICS_CURRENT_ALERTS, M_DISK_USAGE, 
+M_SYSTEM_REPLICATION, M_LOAD_HISTORY_SERVICE 
+ 
+7.2 Backup Agent 
+Manages the entire backup lifecycle: scheduling, execution, verification, catalog housekeeping, 
+and failure recovery. Interfaces directly with HANA via hdbcli for BACKUP DATA commands 
+and M_BACKUP_CATALOG monitoring. 
+Risk levels: Read catalog = 1 point; trigger differential = 6 points; trigger full = 6 points; catalog 
+delete = 8 points. 
+ 
+7.3 Recovery Agent 
+Detects service failures and executes recovery procedures, from simple service restarts to 
+system replication takeover. Monitors M_SERVICES for status changes and executes recovery 
+via sapcontrol (OS-level commands via SSH) and SQL ALTER SYSTEM START SERVICE. 
+ 
+7.4 SQL Tuning Agent 
+Identifies expensive SQL statements, analyzes execution plans, and recommends or executes 
+optimizations. Queries M_SQL_PLAN_CACHE, M_EXPENSIVE_STATEMENTS, and 
+M_ACTIVE_STATEMENTS. Before recommending tuning actions, the SQL Tuning Agent 
+queries the RAG Agent with the problematic SQL pattern to retrieve relevant SAP Notes and 
+known performance issues. 
+ 
+7.5 Capacity Agent 
+Tracks disk, memory, and table growth trends. Predicts capacity thresholds and recommends 
+actions before exhaustion. Integrates with the global.ini configuration management workflow 
+(see Section 8) to ensure backup and data volume paths are correctly configured. 
+ 
+7.6 Security Agent 
+Continuous security posture assessment covering privilege auditing, password policy 
+compliance, encryption verification, audit policy checks, and SAP Security Patch Day 
+vulnerability assessment. Queries EFFECTIVE_PRIVILEGES, M_PASSWORD_POLICY, 
+M_ENCRYPTION_OVERVIEW, and AUDIT_POLICIES. 
+For the January 2026 Patch Day specifically, the Security Agent would flag CVE-2026-0492 
+(HANA Privilege Escalation, CVSS 8.8) as directly affecting the managed HANA instance and 
+generate an Action Certificate recommending immediate assessment and patching. 
+ 
+Agent Summary Table 
+Agent Responsibility Auto-Fix Scope Risk Tier 
+Health Agent KPIs, EWA findings, M_* 
+views 
+Read-only (monitoring) Low 
+Backup Agent Backup compliance, catalog 
+mgmt 
+Differential + full backup Medium 
+Recovery Agent Service failure recovery Restart (approval for 
+failover) 
+High 
+SQL Tuning 
+Agent 
+Expensive SQL optimization Index creation (approval 
+for hints) 
+Medium 
+Capacity Agent Disk/memory trending, 
+global.ini 
+Trace cleanup, config 
+updates 
+Medium 
+Security Agent Parameter drift, CVE 
+assessment 
+Privilege revocation 
+(approval req) 
+High 
+RAG Agent SAP knowledge retrieval + 
+support 
+Read-only (advisory) Low 
+Browser-Use 
+Agent 
+SAP web UI automation Navigation + extraction Medium 
+ 
+  
+8. Configuration Agent: global.ini Management 
+A critical operational requirement for HANA Express and production HANA systems is ensuring 
+the global.ini configuration file contains correct backup and volume path entries. HANA 
+Sentinel's Capacity Agent and Backup Agent jointly manage this configuration as part of their 
+initialization and continuous compliance checks. 
+ 
+Target Configuration 
+File path: /usr/sap/HXE/SYS/global/hdb/custom/config/global.ini 
+ 
+The agents verify that the following entries exist under the [persistence] section: 
+[persistence] 
+basepath_databackup = /hdb/HXE/backup/data 
+basepath_logbackup = /hdb/HXE/backup/log 
+basepath_datavolumes = /hdb/HXE/data 
+basepath_logvolumes = /hdb/HXE/log 
+ 
+Agent Workflow for global.ini Compliance 
+Step 1 (Detection): On startup and every 15 minutes, the Capacity Agent reads the global.ini file 
+via SSH and parses the [persistence] section. 
+Step 2 (Validation): The agent checks whether all four required entries (basepath_databackup, 
+basepath_logbackup, basepath_datavolumes, basepath_logvolumes) are present with correct 
+values. 
+Step 3 (Remediation): If any entries are missing, the agent generates an Action Certificate 
+describing the exact changes needed. Since this is a parameter change (risk score: 6), it flows 
+through the Policy Engine for approval in accordance with the current governance mode. 
+Step 4 (Execution): Upon approval, the agent appends the missing entries to global.ini using 
+sed or direct file manipulation via SSH. It then verifies the changes by re-reading the file. 
+Step 5 (Verification): The agent queries M_INIFILE_CONTENTS via SQL to confirm HANA has 
+picked up the configuration changes. If HANA requires a restart to apply changes, the agent 
+escalates to the Recovery Agent with appropriate risk scoring. 
+ 
+Implementation Detail 
+# Agent checks global.ini via SSH 
+def check_global_ini(ssh_client): 
+    ini_path = '/usr/sap/HXE/SYS/global/hdb/custom/config/global.ini' 
+    required_entries = { 
+        'basepath_databackup': '/hdb/HXE/backup/data', 
+        'basepath_logbackup': '/hdb/HXE/backup/log', 
+        'basepath_datavolumes': '/hdb/HXE/data', 
+        'basepath_logvolumes': '/hdb/HXE/log' 
+    } 
+     
+    stdin, stdout, stderr = ssh_client.exec_command(f'cat {ini_path}') 
+    content = stdout.read().decode() 
+     
+    missing = {} 
+    for key, value in required_entries.items(): 
+        if f'{key} = {value}' not in content: 
+            missing[key] = value 
+     
+    if missing: 
+        return generate_action_certificate( 
+            action_type='config_update', 
+            target='global.ini [persistence]', 
+            changes=missing, 
+            risk_score=6, 
+            rollback='Remove added entries from global.ini' 
+        ) 
+    return None  # All entries present 
+ 
+The basepath_logbackup entry is particularly critical because it enables automatic log backups, 
+which are essential for point-in-time recovery. Without this entry, HANA's log area can fill up and 
+block all transactions. The Backup Agent depends on this path being correctly configured before 
+it can execute any log backup operations. 
+ 
+  
+9. RAG Agent: Vertex AI-Powered Knowledge Engine 
+The RAG Agent serves dual roles: it grounds operational agents' decisions in SAP 
+documentation (ensuring recommendations are based on official SAP Notes, not LLM 
+hallucinations), and it powers a user-facing support assistant that Basis administrators can 
+query in natural language. 
+ 
+Ingestion Pipeline 
+• SAP EWA Reports (PDF) parsed via Document AI Layout Parser 
+• SAP Notes (HTML/PDF) from SAP Support Portal 
+• HANA Administration Guides (PDF) 
+• SAP KBAs (Knowledge Base Articles) 
+• SAP Security Patch Day bulletins (HTML, extracted by Browser-Use Agent) 
+• Internal runbooks and operational procedures 
+ 
+Vertex AI RAG Engine Configuration 
+from vertexai import rag 
+import vertexai 
+ 
+vertexai.init(project='hana-sentinel', location='us-central1') 
+ 
+sap_corpus = rag.create_corpus( 
+    display_name='sap-hana-knowledge-base', 
+    description='SAP Notes, EWA reports, HANA admin guides, Patch Day bulletins' 
+) 
+ 
+rag.import_files( 
+    corpus_name=sap_corpus.name, 
+    paths=['gs://hana-sentinel-docs/sap-notes/', 
+           'gs://hana-sentinel-docs/ewa-reports/', 
+           'gs://hana-sentinel-docs/hana-admin-guides/', 
+           'gs://hana-sentinel-docs/patch-day-bulletins/'], 
+    transformation_config=rag.TransformationConfig( 
+        rag.ChunkingConfig(chunk_size=512, chunk_overlap=100) 
+    ), 
+    max_embedding_requests_per_min=900 
+) 
+ 
+Embedding model: gemini-embedding-001 (3072 dimensions, 8,192 token input limit). Hybrid 
+search (semantic + keyword) is critical because keyword search catches exact SAP Note 
+numbers (e.g., SAP Note 2222200) and error codes, while semantic search handles conceptual 
+queries. 
+ 
+Dual-Role Operation 
+Role 1 (Agent Grounding): When operational agents need to make decisions, they query the 
+RAG Agent to retrieve relevant documentation. The SQL Tuning Agent, for example, queries the 
+RAG corpus with a problematic SQL pattern before recommending optimization. The response 
+includes citations to specific SAP Notes and admin guide sections, which are embedded into the 
+Action Certificate's rag_sources field. 
+ 
+Role 2 (Support Assistant): Basis administrators can query the RAG Agent directly via the 
+HANA Sentinel UI or CLI. Example: 'How do I reduce memory pressure in HANA columnstore?' 
+returns an answer grounded in SAP Note 2222200 and the HANA Administration Guide Chapter 
+12, with confidence scores and source citations. 
+ 
+  
+10. Browser-Use Agent: SAP Web Interface 
+Automation 
+The Browser-Use Agent leverages the browser-use Python framework (v0.10.1) to automate 
+interactions with SAP web interfaces that lack programmatic APIs. Built on Chrome DevTools 
+Protocol (CDP), it uses a hybrid DOM analysis + visual understanding approach where an LLM 
+determines actions based on both the serialized DOM tree and screenshots, making it resilient 
+to SAP Fiori's notoriously dynamic element IDs. 
+ 
+Key Use Cases 
+• SAP Security Patch Day monitoring: Navigate to support.sap.com, extract security note 
+lists, CVE identifiers, CVSS scores, and affected components from the monthly Patch 
+Day bulletin. 
+• HANA Cockpit data extraction: Navigate to System Overview tiles, extract health 
+dashboards, capture KPI visualizations as audit screenshots. 
+• EWA report retrieval: Access Solution Manager, navigate to EarlyWatch Alert 
+Management, extract the latest report's Service Summary, Performance, and Security 
+sections. 
+• SAP Note detail extraction: For each relevant security note (like 3691059 for HANA 
+privilege escalation), extract full remediation steps, affected versions, and workaround 
+instructions. 
+• Configuration operations: Perform administrative tasks in HANA Cockpit that are not 
+exposed via SQL. 
+ 
+Security Configuration 
+sap_profile = BrowserProfile( 
+    headless=True, 
+    viewport={'width': 1920, 'height': 1080}, 
+    wait_for_network_idle_page_load_time=5.0,  # SAP Fiori is AJAX-heavy 
+    minimum_wait_page_load_time=3.0, 
+    wait_between_actions=2.0, 
+    allowed_domains=[                           # PREVENTS PROMPT INJECTION 
+        'support.sap.com', 
+        'me.sap.com', 
+        'sap-hana-cockpit.internal.company.com', 
+        'solman.internal.company.com' 
+    ], 
+    storage_state='sap_auth_state.json',       # Persist auth cookies 
+    device_scale_factor=2.0                     # High-res audit screenshots 
+) 
+ 
+Security is non-negotiable: sensitive_data must always be paired with allowed_domains. 
+Without domain restrictions, prompt injection attacks on visited pages could expose credentials. 
+All sessions use storage_state persistence to minimize re-authentication, and every step 
+triggers an audit screenshot hook. 
+ 
+  
+11. Explainable Remediation (X-Fix) 
+Every automated fix generates an X-Fix report, a structured, human-readable explanation that 
+maps directly to ITIL Change Management RFC fields. Critical design principle: X-Fix 
+explanations are grounded in observable system state, not LLM-generated narratives. Every 
+claim in an X-Fix report links to specific metrics, logs, or trace data. 
+ 
+X-Fix Report Structure 
+Section Content Purpose 
+SUMMARY One-paragraph description of issue and 
+proposed fix 
+Quick executive overview 
+WHY (Root Cause) Trigger event, evidence chain with metric links, 
+confidence score, RAG sources, alternatives 
+considered 
+Auditable reasoning chain 
+WHAT (Proposed 
+Actions) 
+Numbered steps with commands, estimated 
+duration per step 
+Exact execution plan 
+RISK (Impact 
+Assessment) 
+Risk score (1-25), blast radius, affected 
+processes, budget cost, approval requirement 
+Informed risk decision 
+ROLLBACK Auto-trigger conditions, reversal steps, 
+estimated time, data loss risk 
+Safety net 
+EXPECTED 
+OUTCOME 
+Target metrics post-fix, verification method, 
+escalation criteria 
+Success criteria 
+ 
+12. Replayable Incidents and Continuous Learning 
+HANA Sentinel records every incident with full system state, event streams, and agent decision 
+traces, enabling sandbox replay for continuous improvement. This is the system's learning 
+flywheel: incidents become training data, what-if scenarios validate policy changes, and 
+historical pattern matching (via vector similarity search on pgvector embeddings) accelerates 
+future diagnosis. 
+ 
+  
+13. Lab Environment: GCP + HANA Express Setup 
+The hackathon development and demonstration environment runs on Google Cloud Platform 
+with SAP HANA Express Edition in Docker. This section documents the exact infrastructure 
+configuration for reproducibility. 
+ 
+GCP Compute Instance 
+Parameter Value 
+Instance name instance-20260211-142542 
+Machine type n2-standard-8 (8 vCPU, 32 GB RAM) 
+CPU platform Intel Cascade Lake (2 threads/core) 
+Zone us-central1-a 
+Project ai-connect-sap26blr-325 
+OS image SLES SAP 15 (SUSE Linux Enterprise Server for SAP) 
+Boot disk 40 GB Persistent (SCSI) 
+Data disk 100 GB Persistent (SCSI, /dev/sdb, mounted at /data) 
+External IP 35.238.233.131 
+Internal IP 10.128.0.2 
+Network tier PREMIUM 
+Shielded VM Integrity monitoring ON, vTPM ON, Secure Boot OFF 
+Status RUNNING 
+ 
+HANA Express Docker Configuration 
+sudo docker run -d \ 
+    -p 39013:39013 \ 
+    -p 39015:39015 \ 
+    -p 39041-39045:39041-39045 \ 
+    -h hxehost \ 
+    -v /data/hxe:/hana/mounts \ 
+    --ulimit nofile=1048576:1048576 \ 
+    --sysctl kernel.shmmax=1073741824 \ 
+    --name hxehana \ 
+    saplabs/hanaexpress:latest \ 
+    --passwords-url file:///hana/mounts/hxe_password.json \ 
+    --agree-to-sap-license 
+ 
+Port Mapping 
+Port Service Purpose 
+39013 HANA SQL/MDX (System DB) Primary database connection via hdbcli 
+39015 HANA SQL/MDX (Tenant HXE) Tenant database connection 
+39041 HANA Cockpit Web-based administration UI (Browser-Use 
+Agent target) 
+39042 HANA XSA Controller Extended Application Services 
+39043-39045 HANA XSA Runtime Application runtime ports 
+ 
+Connection Parameters for Agents 
+# Python hdbcli connection (used by all operational agents) 
+import hdbcli.dbapi 
+ 
+conn = hdbcli.dbapi.connect( 
+    address='35.238.233.131',     # External IP for dev; 10.128.0.2 for prod 
+    port=39013,                    # System DB port 
+    user='SYSTEM', 
+    password=vault.get_secret('hana/hxe/system_password'),  # HANA_PASSWORD_REVOKED_PLACEHOLDER_00000000000000000000 in dev 
+    encrypt=True, 
+    sslValidateCertificate=False   # Dev only; enforce in production 
+) 
+ 
+# SSH connection for sapcontrol and global.ini management 
+ssh_config = { 
+    'hostname': '35.238.233.131', 
+    'username': 'hxeadm', 
+    'key_filename': '/path/to/gcp_ssh_key', 
+    'port': 22 
+} 
+ 
+Note: The master password (HANA_PASSWORD_REVOKED_PLACEHOLDER_00000000000000000000) is used exclusively in the development environment. 
+Production deployments must use Secret Manager with automatic rotation and IAM-scoped 
+access for each agent's service account. 
+ 
+Docker Volume Mapping 
+Host path /data/hxe maps to container path /hana/mounts. The password configuration file at 
+/hana/mounts/hxe_password.json contains the master password used during HANA Express 
+initialization. The data disk (100 GB, /dev/sdb) provides dedicated I/O for HANA data and log 
+volumes, separate from the OS boot disk. 
+ 
+  
+14. REST API Contracts 
+The Control Plane exposes a FastAPI-based REST API for all operations. All endpoints follow a 
+consistent envelope pattern with OpenTelemetry trace correlation. 
+ 
+Core API Endpoints 
+Method Endpoint Description 
+POST /api/v1/incidents Create incident from agent detection 
+GET /api/v1/incidents/{id} Retrieve incident details 
+GET /api/v1/incidents/{id}/timeline Full event timeline 
+POST /api/v1/incidents/{id}/remediation Propose X-Fix remediation 
+POST /api/v1/remediations/{cert_id}/approve Human approval of Action Certificate 
+POST /api/v1/remediations/{cert_id}/execute Trigger execution 
+POST /api/v1/remediations/{cert_id}/rollback Trigger rollback 
+GET /api/v1/risk-budgets/{system_id} Current risk budget status 
+GET /api/v1/risk-
+budgets/{system_id}/transactions 
+Budget transaction history 
+GET /api/v1/agents List all registered agents 
+GET /api/v1/agents/{id}/decisions Agent decision history 
+POST /api/v1/replays Create incident replay 
+GET /api/v1/replays/{id}/comparison Original vs replay comparison 
+POST /api/v1/rag/query Query RAG knowledge base 
+POST /api/v1/config/global-ini/check Validate global.ini entries 
+POST /api/v1/security/patch-day/assess Assess Patch Day impact on landscape 
+ 
+  
+15. Sequence Diagrams for Key Flows 
+Flow 1: Issue Detection to Autonomous Remediation 
+Health Agent   Supervisor   SQL Tuning   RAG Agent   Policy   Risk Budget   HANA 
+    |               |          Agent        |        Engine    Engine        | 
+    |--query M_*--->|                       |          |          |          | 
+    |<--CPU 83%-----|                       |          |          |          | 
+    |--publish----->|                       |          |          |          | 
+    | health_event  |                       |          |          |          | 
+    |               |--delegate------------>|          |          |          | 
+    |               |  investigate_cpu      |          |          |          | 
+    |               |                       |--query-->|          |          | 
+    |               |                       |<-Notes---|          |          | 
+    |               |                       |--generate Action Certificate--| 
+    |               |                       |--check-->|          |          | 
+    |               |                       |<-approved|          |          | 
+    |               |                       |--deduct------------>|          | 
+    |               |                       |<-budget OK---------|          | 
+    |               |                       |--CREATE INDEX--------------->| 
+    |               |                       |<-success----------------------| 
+    |               |                       |--verify M_SQL_PLAN_CACHE---->| 
+    |               |                       |<-avg < 200ms----------------| 
+    |               |<--X-Fix report--------|          |          |          | 
+ 
+Flow 2: Security Patch Day Assessment (January 2026) 
+Browser-Use   RAG Agent   Security   Policy    Supervisor   Approver 
+Agent                     Agent      Engine                 (Human) 
+  |               |          |          |          |           | 
+  |--navigate support.sap.com/patch-day-january-2026--------->| 
+  |--extract 17 security notes, CVEs, CVSS scores----------->| 
+  |--send to RAG->|          |          |          |           | 
+  |               |--ingest->|          |          |           | 
+  |               |  corpus  |          |          |           | 
+  |               |          |          |          |           | 
+  |               |<-query---|          |          |           | 
+  |               | CVE-2026-0492       |          |           | 
+  |               |--HANA Note 3691059->|          |           | 
+  |               |  + remediation steps|          |           | 
+  |               |          |          |          |           | 
+  |               |          |--check HANA version via SQL--->| 
+  |               |          |--generate Action Certificate-->| 
+  |               |          |--check--->|          |           | 
+  |               |          |<-NEEDS_APPROVAL-----|           | 
+  |               |          |                     |           | 
+  |               |          |--send X-Fix report------------>| 
+  |               |          |<-approved--------------------------| 
+  |               |          |--schedule patch window-------->| 
+ 
+Flow 3: global.ini Configuration Compliance 
+Capacity Agent     Policy Engine     HANA (SSH)     HANA (SQL) 
+     |                   |                |              | 
+     |--SSH: cat global.ini-------------->|              | 
+     |<--file contents--------------------|              | 
+     |--parse [persistence] section       |              | 
+     |--missing: basepath_logbackup       |              | 
+     |                   |                |              | 
+     |--generate Action Certificate       |              | 
+     |  (risk_score=6, config_update)     |              | 
+     |--check policy---->|                |              | 
+     |<--approved--------|                |              | 
+     |                   |                |              | 
+     |--SSH: append to global.ini-------->|              | 
+     |<--success--------------------------|              | 
+     |--SQL: SELECT FROM M_INIFILE_CONTENTS------------>| 
+     |<--verified: entries present----------------------| 
+     |--publish config_compliant event    |              | 
+ 
+  
+16. Complete Technology Stack 
+Layer Technology Purpose 
+Orchestration LangGraph on Vertex AI Agent 
+Engine 
+Multi-agent state machines, HITL, 
+checkpointing 
+LLM (Primary) Gemini 2.5 Flash Agent reasoning, X-Fix generation (1M 
+context) 
+LLM (Complex) Gemini 2.5 Pro Deep root cause analysis, complex SQL 
+tuning 
+RAG Engine Vertex AI RAG Engine Doc ingestion, hybrid search, grounded 
+generation 
+Embeddings gemini-embedding-001 3072-dim vectors for RAG and incident 
+similarity 
+API Layer FastAPI on Cloud Run REST API control plane (auto-scaling) 
+Event Bus Google Cloud Pub/Sub Inter-agent communication, event 
+distribution 
+Policy Engine Open Policy Agent (OPA) Policy-as-code enforcement (Rego, sub-
+ms eval) 
+State Store PostgreSQL (Cloud SQL) Agent state, Action Certs, Risk Budgets, 
+incidents 
+Vector Store pgvector extension Incident similarity search for replay 
+engine 
+Audit Analytics BigQuery Long-term audit log storage and 
+analytics 
+Object Storage Cloud Storage SAP documents, screenshots, agent 
+artifacts 
+Observability OpenTelemetry + Cloud Trace Distributed tracing, metrics, alerting 
+Browser 
+Automation 
+browser-use v0.10.1 SAP web UI interaction (CDP-based) 
+HANA Connectivity Python hdbcli Direct SQL execution (PEP 249 
+compliant) 
+OS Operations SSH (paramiko) + sapcontrol Service lifecycle, global.ini management 
+Dev/Test HANA HANA Express (Docker) saplabs/hanaexpress:latest on n2-
+standard-8 
+GCP Project ai-connect-sap26blr-325 Hackathon project with Vertex AI APIs 
+enabled 
+Secrets Secret Manager Credential storage with automatic 
+rotation 
+CI/CD Cloud Build Container build and deployment 
+ 
+17. Chaos Engineering Test Suite 
+HANA Sentinel includes a built-in chaos engineering framework to validate agent responses in 
+the HANA Express lab environment. 
+ 
+Scenario Simulation Method Expected Agent Response Pass Criteria 
+Indexserver crash kill -9 on 
+hdbindexserver PID 
+Recovery Agent: detect, Action 
+Cert, restart 
+Service GREEN 
+within 120s 
+Log disk full dd if=/dev/zero 
+of=/hana/log/fill 
+Capacity Agent: detect, clean 
+traces, alert 
+Disk usage <90% 
+within 60s 
+Backup failure Block backup target 
+via iptables 
+Backup Agent: detect, retry 
+alternate, alert 
+Backup completes 
+within 300s 
+Memory pressure Load large dataset 
+into memory 
+Health + SQL Tuning: identify 
+offender, unload 
+Memory <85% within 
+300s 
+Missing global.ini Remove 
+basepath_logbackup 
+entry 
+Capacity Agent: detect, generate 
+cert, restore 
+Entry restored within 
+90s 
+Security drift Grant SAP_ALL to 
+test user 
+Security Agent: detect, revoke, 
+audit report 
+Privilege revoked 
+within 60s 
+Patch Day alert Simulate new CVE for 
+HANA 
+Browser-Use + Security: extract, 
+assess, report 
+Assessment 
+generated <10min 
+ 
+  
+18. Innovation Highlights for Hackathon Judges 
+ 
+Innovation 1: Agent Risk Budgets. First application of SRE error budget principles to 
+autonomous AI agent governance. Creates a quantitative trust framework that enables 
+graduated autonomy without binary 'fully manual' or 'fully automated' choices. No existing SAP 
+automation tool implements this. 
+ 
+Innovation 2: Action Certificates. Digitally signed, pre-validated remediation plans with 
+preconditions, postconditions, blast radius analysis, and automatic rollback triggers. Bridges the 
+gap between infrastructure-as-code approval patterns (Terraform plan/apply) and AI agent 
+autonomy. 
+ 
+Innovation 3: Explainable Remediation (X-Fix). Every automated action generates a 
+structured explanation grounded in observable system state (not LLM narrative), mapping 
+directly to ITIL RFC fields. This makes AI actions auditable for SOX, GDPR, and EU AI Act 
+compliance. 
+ 
+Innovation 4: Incident Replay as a Learning Flywheel. Recorded incidents become training 
+data for what-if analysis, enabling continuous agent improvement. Combined with vector-
+similarity search, new incidents are matched to historical patterns for accelerated diagnosis. 
+ 
+Innovation 5: Browser-Use + SAP Fiori. Novel application of LLM-driven browser automation 
+to SAP's web interfaces. The hybrid DOM + vision approach handles Fiori's dynamic IDs 
+naturally, eliminating brittle selector-based automation. Applied to SAP Security Patch Day 
+monitoring for real-time vulnerability assessment. 
+ 
+Innovation 6: Chaos Engineering for SAP. Built-in failure simulation framework validates 
+agent responses before production deployment. Very few teams apply chaos engineering 
+principles to SAP infrastructure. 
+ 
+Google + SAP Partnership Alignment 
+• Uses Agent2Agent (A2A) protocol patterns (SAP is a founding contributor) 
+• Deploys on Vertex AI Agent Engine with native LangGraph support 
+• Leverages Gemini models available via SAP BTP Generative AI Hub 
+• Demonstrates zero-copy data patterns mirroring SAP BDC Connect for BigQuery 
+• Implements OpenTelemetry (Google-championed standard) for full observability 
+• Runs on GCP infrastructure (n2-standard-8, Cloud SQL, Cloud Run, Pub/Sub) 
+ 
+  
+19. Graduated Autonomy Roadmap 
+ 
+Phase Timeline Scope Target Metric 
+1: Observer 
+(Hackathon MVP) 
+Weeks 1-2 All agents monitor only. Health Agent polls 
+M_* views, RAG Agent ingests SAP docs, 
+Browser-Use Agent extracts EWA reports 
+and Patch Day bulletins. Zero 
+autonomous execution. 
+Demonstrate 
+architecture + X-Fix 
+reports 
+2: Advisor Month 1-2 Read-only operations autonomous. Write 
+operations generate X-Fix proposals for 
+human review. Risk Budget tracking 
+active but advisory. 
+Human approval rate 
+>80% 
+3: Operator Month 3-6 Low/medium-risk actions execute 
+autonomously (risk score <= 10). High-risk 
+needs human approval. Chaos 
+engineering tests validate reliability. 
+MTTR <15min, 40% 
+auto-resolution 
+4: Trusted Operator Month 6-
+12 
+Expanded scope based on trust multiplier. 
+Most operations automated except critical 
+(risk >= 17). Incident replay drives 
+improvement. 
+MTTR <8min, 70% 
+auto-resolution 
+5: Autonomous 12+ 
+months 
+Full autonomous operation within policy 
+boundaries. Human oversight shifts from 
+approval to audit. Emergency kill switch 
+maintained. 
+MTTR <3min, 85% 
+auto-resolution 
+ 
+Success Metrics 
+Metric Phase 1 Phase 3 Phase 5 
+MTTR Baseline <15 min <3 min 
+Autonomous resolution rate 0% 40% 85% 
+False positive rate <20% <5% <2% 
+Rollback rate N/A <10% <3% 
+Basis team toil reduction 0% 40% 70% 
+X-Fix approval rate N/A >80% >95% 
+Risk budget utilization N/A 60% 85% 
+Patch Day assessment time Manual <4 hours <1 hour 
+ 
+20. Risk Mitigation Strategy 
+Risk Likelihood Impact Mitigation 
+Agent executes 
+harmful action on 
+production HANA 
+Low Severe Policy Engine + Risk Budget + Action Certificates + 
+mandatory pre/post checks + automatic rollback 
+LLM hallucination 
+leads to incorrect 
+diagnosis 
+Medium Major RAG grounding in SAP documentation, confidence 
+thresholds, human review for high-risk actions 
+Browser-Use Agent 
+credential exposure 
+via prompt injection 
+Low Severe allowed_domains lockdown, sensitive_data isolation, 
+domain-scoped tools 
+Risk Budget gaming 
+(agent underreports 
+risk) 
+Low Major Risk scores derived from operation type (not agent 
+self-assessment), independent policy engine scoring 
+SAP HANA version 
+incompatibility 
+Medium Moderate Version-aware agent configs, HANA Express testing, 
+graceful degradation 
+EU AI Act non-
+compliance 
+Medium Major X-Fix explainability, full audit trails, human oversight 
+by design, graduated autonomy 
+Vendor lock-in 
+(Google Cloud) 
+Low Moderate OpenTelemetry, OPA (CNCF), LangGraph (MIT-
+licensed), containerized services 
+ 
+  
+Sources 
+[1] SAP Support. SAP Security Patch Day, January 2026. https://support.sap.com/en/my-
+support/knowledge-base/security-notes-news/january-2026.html 
+[2] Onapsis Research Labs. SAP Security Patch Day for January 2026. 
+https://onapsis.com/blog/patch-day-january-2026/ 
+[3] SecurityWeek. SAP's January 2026 Security Updates Patch Critical Vulnerabilities. 
+https://www.securityweek.com/saps-january-2026-security-updates-patch-critical-vulnerabilities/ 
+[4] Pathlock. SAP Security Patch Tuesday January 2026. https://pathlock.com/blog/security-
+alerts/sap-security-patch-tuesday-january-2026/ 
+[5] SecurityBridge. SAP Security Patch Day, January 2026. https://securitybridge.com/blog/sap-
+security-patch-day-january-2026/ 
+[6] RedRays. SAP Security Patch Day January 2026. https://redrays.io/blog/sap-security-patch-
+day-january-2026/ 
+[7] CyberPress. SAP Security Patch Day January 2026 Addresses Critical Injection and RCE 
+Vulnerabilities. https://cyberpress.org/sap-injection-and-rce-vulnerabilities/ 
+[8] Google Cloud. Vertex AI Agent Builder. https://cloud.google.com/products/agent-builder 
+[9] Google Cloud. Pub/Sub Overview. https://cloud.google.com/pubsub/docs/overview 
+[10] Open Policy Agent. https://github.com/open-policy-agent/opa 
+[11] Google SRE Book. Embracing Risk. https://sre.google/sre-book/embracing-risk/ 
+[12] LangGraph Documentation. State Management and Agent Orchestration. https://langchain-
+ai.github.io/langgraph/ 
+[13] browser-use. Browser Automation Framework. https://github.com/browser-use/browser-use 
+[14] SAP Community. Future of SAP Landscape Management. 
+https://community.sap.com/t5/technology-blog-posts-by-sap/future-of-sap-landscape-
+management/ba-p/13577450 
+[15] Avantra. SAP Operations Automation. https://www.avantra.com/ 
+[16] Permit.io. Human-in-the-Loop for AI Agents: Best Practices. 
+https://www.permit.io/blog/human-in-the-loop-for-ai-agents-best-practices-frameworks-use-
+cases-and-demo 
+[17] Arion Research. The Agentic Service Bus: Inter-Agent Communication. 
+https://www.arionresearch.com/blog/the-agentic-service-bus-a-new-architecture-for-inter-agent-
+communication 
+[18] Knight First Amendment Institute. Levels of Autonomy for AI Agents. 
+https://knightcolumbia.org/content/levels-of-autonomy-for-ai-agents-1 
