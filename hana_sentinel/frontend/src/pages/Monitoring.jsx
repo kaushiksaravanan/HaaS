@@ -304,7 +304,7 @@ export default function Monitoring() {
                 </div>
                 <div className="text-right flex-shrink-0">
                   <div className="font-serif text-lg font-semibold text-foreground">{query.duration}s</div>
-                  <div className="text-xs text-muted-foreground">{query.calls} calls</div>
+                  <div className="text-xs text-muted-foreground">{query.calls} MB</div>
                 </div>
               </div>
             </div>

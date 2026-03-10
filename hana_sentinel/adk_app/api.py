@@ -737,7 +737,7 @@ def get_conversation(conversation_id: str):
 
 
 def _extract_command_with_llm(user_text: str) -> Optional[str]:
-    """Use configured LLM to convert natural language text to a single shell command."""
+    """Use configured LLM to classify intent and extract a shell command if appropriate."""
     try:
         from .aicore_client import get_aicore_client
 
@@ -748,16 +748,20 @@ def _extract_command_with_llm(user_text: str) -> Optional[str]:
 
         system_prompt = (
             "You are an expert Linux/SAP HANA administrator. "
-            "Extract or derive exactly ONE executable Linux shell command from the user's message. "
-            "Return ONLY the raw command — no markdown backticks, no explanation, no commentary. "
-            "Examples:\n"
-            "  User: 'what is ls -ltr' → ls -ltr\n"
-            "  User: 'show me disk usage' → df -h\n"
-            "  User: 'run uptime on the server' → uptime\n"
-            "  User: 'check HANA processes' → sapcontrol -nr 00 -function GetProcessList\n"
-            "  User: 'how much memory is free' → free -h\n"
-            "  User: 'list files in /hana/shared' → ls -la /hana/shared\n"
-            "If the message has no plausible command intent, return exactly: NO_COMMAND"
+            "First decide: is the user asking a KNOWLEDGE QUESTION or requesting a COMMAND to run?\n\n"
+            "KNOWLEDGE QUESTIONS (return NO_COMMAND):\n"
+            "  - Questions about concepts, configuration, architecture: 'reverse proxy in hana?', 'what is HANA replication?'\n"
+            "  - SAP Note lookups: 'sap note 2222222', 'sap notes about memory'\n"
+            "  - Best practices, troubleshooting theory: 'how does HANA backup work?'\n"
+            "  - General knowledge: 'explain index server', 'difference between row and column store'\n\n"
+            "COMMANDS (return the shell command):\n"
+            "  - Explicit commands: 'ls -ltr', 'df -h', 'run uptime'\n"
+            "  - Actionable requests to check live system state: 'check disk usage', 'show running processes'\n"
+            "  - System administration tasks: 'restart indexserver', 'list files in /hana/shared'\n\n"
+            "Rules:\n"
+            "- If KNOWLEDGE QUESTION → return exactly: NO_COMMAND\n"
+            "- If COMMAND → return ONLY the raw shell command, no backticks, no explanation\n"
+            "- When in doubt, prefer NO_COMMAND over guessing a wrong command"
         )
         prompt = f"User message: {user_text.strip()}"
 
@@ -873,9 +877,13 @@ def _is_knowledge_question(msg_lower: str) -> bool:
     """Detect if the user message is a knowledge/documentation question."""
     import re
 
-    # SAP Note pattern: "SAP Note 123456" or "note 123456" or just "123456" (6-7 digit number)
-    sap_note_pattern = r'\b(?:sap\s*)?note\s*\d{5,7}\b|\b\d{6,7}\b'
+    # SAP Note pattern: "SAP Note 123456" or "note 123456" or "sap notes 2222222" or just "123456" (6-7 digit number)
+    sap_note_pattern = r'\b(?:sap\s*)?notes?\s*\d{5,7}\b|\b\d{6,7}\b'
     if re.search(sap_note_pattern, msg_lower):
+        return True
+
+    # Questions ending with '?' are almost always knowledge questions
+    if msg_lower.strip().endswith('?'):
         return True
 
     knowledge_patterns = [
@@ -888,7 +896,7 @@ def _is_knowledge_question(msg_lower: str) -> bool:
         "why does ", "why is ", "why do ",
         "when should ", "when to ",
         "best practice", "recommend",
-        "documentation", "sap note",
+        "documentation", "sap note", "sap notes",
         "browse ", "search ", "look up ", "find info",
         "commands for", "command for", "clean", "cleanup", "housekeeping",
     ]
@@ -1159,10 +1167,18 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
             return _answer_with_llm(message)
 
     if admin_mode:
-        command = _extract_command_with_llm(message) or _extract_command_heuristic(message, msg_lower)
+        # Let the LLM decide if this is a command or a knowledge question
+        command = _extract_command_with_llm(message)
 
         if not command:
-            return _resp("Admin mode is ON, but I could not derive an executable command from your message.")
+            # LLM says it's NOT a command — try answering as a knowledge question
+            try:
+                browse_answer = _browse_and_answer(message, use_autonomous_browser=autonomous_browser)
+                if browse_answer.get("response") and "couldn't find" not in browse_answer.get("response", ""):
+                    return browse_answer
+            except Exception as exc:
+                logger.warning(f"Browse failed in admin mode fallback: {exc}")
+            return _answer_with_llm(message)
 
         executor = get_http_executor()
         if not executor.is_configured():
@@ -1372,8 +1388,14 @@ def get_realtime_metrics():
 
 @app.get("/api/v1/metrics/services")
 def get_hana_services():
-    """Get HANA service status from M_SERVICES view."""
+    """Get HANA service status from M_SERVICES joined with M_SERVICE_MEMORY."""
     from .tools.hana_tools import query_hana
+
+    def _strip_quotes(val):
+        """Strip escaped quotes from HANA string values."""
+        if isinstance(val, str):
+            return val.strip('"')
+        return val
 
     try:
         conn = check_hana_connection()
@@ -1383,29 +1405,29 @@ def get_hana_services():
         return {"status": "disconnected", "services": []}
 
     try:
-        result = query_hana("""
-            SELECT
-                SERVICE_NAME,
-                ACTIVE_STATUS,
-                PORT,
-                ROUND(TOTAL_MEMORY_USED_SIZE / 1024 / 1024 / 1024, 1) AS memory_gb,
-                PROCESS_CPU_TIME
-            FROM M_SERVICES
-            ORDER BY SERVICE_NAME
-        """)
+        result = query_hana(
+            "SELECT s.SERVICE_NAME, s.ACTIVE_STATUS, s.PORT,"
+            " ROUND(m.PHYSICAL_MEMORY_SIZE / 1024 / 1024 / 1024, 1) AS MEMORY_GB"
+            " FROM M_SERVICES s"
+            " LEFT JOIN M_SERVICE_MEMORY m ON s.HOST = m.HOST AND s.PORT = m.PORT"
+            " ORDER BY s.SERVICE_NAME"
+        )
+        logger.info(f"Services query returned {result.get('row_count', len(result.get('rows', [])))} rows")
         if result.get("status") == "success":
             services = []
             for row in result.get("rows", []):
                 services.append({
-                    "name": row.get("SERVICE_NAME", ""),
-                    "status": "running" if row.get("ACTIVE_STATUS") == "YES" else "stopped",
+                    "name": _strip_quotes(row.get("SERVICE_NAME", "")),
+                    "status": "running" if _strip_quotes(row.get("ACTIVE_STATUS", "")) == "YES" else "stopped",
                     "port": row.get("PORT", 0),
                     "memory": f"{row.get('MEMORY_GB', 0)} GB",
-                    "cpu": row.get("PROCESS_CPU_TIME", 0),
+                    "cpu": 0,
                 })
             return {"status": "success", "services": services}
-    except Exception:
-        pass
+        else:
+            logger.error(f"Services endpoint - query failed: {result.get('error_message', 'unknown')}")
+    except Exception as e:
+        logger.error(f"Failed to fetch HANA services: {e}", exc_info=True)
 
     return {"status": "error", "services": []}
 
@@ -1415,6 +1437,11 @@ def get_top_queries():
     """Get top resource-consuming queries from M_EXPENSIVE_STATEMENTS."""
     from .tools.hana_tools import query_hana
 
+    def _strip_quotes(val):
+        if isinstance(val, str):
+            return val.strip('"')
+        return val
+
     try:
         conn = check_hana_connection()
         if conn.get("status") != "connected":
@@ -1423,27 +1450,34 @@ def get_top_queries():
         return {"status": "disconnected", "queries": []}
 
     try:
-        result = query_hana("""
-            SELECT TOP 10
-                STATEMENT_STRING,
-                ROUND(DURATION_MICROSEC / 1000000.0, 2) AS duration_sec,
-                EXECUTION_COUNT
-            FROM M_EXPENSIVE_STATEMENTS
-            ORDER BY DURATION_MICROSEC DESC
-        """)
+        result = query_hana(
+            "SELECT TOP 10 STATEMENT_STRING, DURATION_MICROSEC, MEMORY_SIZE"
+            " FROM M_EXPENSIVE_STATEMENTS"
+            " ORDER BY DURATION_MICROSEC DESC"
+        )
         if result.get("status") == "success":
             queries = []
             for idx, row in enumerate(result.get("rows", []), 1):
-                stmt = row.get("STATEMENT_STRING", "")
+                stmt = _strip_quotes(str(row.get("STATEMENT_STRING", "")))
+                duration_us = row.get("DURATION_MICROSEC", 0)
+                try:
+                    duration_sec = round(float(duration_us) / 1000000.0, 2)
+                except (ValueError, TypeError):
+                    duration_sec = 0
+                mem = row.get("MEMORY_SIZE", 0)
+                try:
+                    mem_mb = round(float(mem) / 1024 / 1024, 1)
+                except (ValueError, TypeError):
+                    mem_mb = 0
                 queries.append({
                     "id": idx,
                     "query": stmt[:80] + "..." if len(stmt) > 80 else stmt,
-                    "duration": row.get("DURATION_SEC", 0),
-                    "calls": row.get("EXECUTION_COUNT", 0),
+                    "duration": duration_sec,
+                    "calls": mem_mb,
                 })
             return {"status": "success", "queries": queries}
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Failed to fetch top queries: {e}")
 
     return {"status": "error", "queries": []}
 
@@ -1461,24 +1495,18 @@ def get_active_transactions():
         return {"status": "disconnected", "transactions": []}
 
     try:
-        result = query_hana("""
-            SELECT
-                t.TRANSACTION_ID,
-                t.TRANSACTION_TYPE,
-                t.TRANSACTION_STATUS,
-                SECONDS_BETWEEN(t.START_TIME, CURRENT_TIMESTAMP) AS duration_sec,
-                t.START_TIME,
-                c.CONNECTION_ID,
-                c.CLIENT_IP,
-                c.CLIENT_PID,
-                s.STATEMENT_STRING,
-                ROUND(s.DURATION_MICROSEC / 1000000.0, 2) AS stmt_duration_sec
-            FROM M_TRANSACTIONS t
-            LEFT JOIN M_CONNECTIONS c ON t.CONNECTION_ID = c.CONNECTION_ID
-            LEFT JOIN M_ACTIVE_STATEMENTS s ON t.CONNECTION_ID = s.CONNECTION_ID
-            WHERE t.TRANSACTION_STATUS = 'ACTIVE'
-            ORDER BY t.START_TIME ASC
-        """)
+        result = query_hana(
+            "SELECT t.TRANSACTION_ID, t.TRANSACTION_TYPE, t.TRANSACTION_STATUS,"
+            " SECONDS_BETWEEN(t.START_TIME, CURRENT_TIMESTAMP) AS DURATION_SEC,"
+            " t.START_TIME, c.CONNECTION_ID, c.CLIENT_IP, c.CLIENT_PID,"
+            " s.STATEMENT_STRING,"
+            " ROUND(s.DURATION_MICROSEC / 1000000.0, 2) AS STMT_DURATION_SEC"
+            " FROM M_TRANSACTIONS t"
+            " LEFT JOIN M_CONNECTIONS c ON t.CONNECTION_ID = c.CONNECTION_ID"
+            " LEFT JOIN M_ACTIVE_STATEMENTS s ON t.CONNECTION_ID = s.CONNECTION_ID"
+            " WHERE t.TRANSACTION_STATUS = 'ACTIVE'"
+            " ORDER BY t.START_TIME ASC"
+        )
         if result.get("status") == "success":
             transactions = []
             for row in result.get("rows", []):
