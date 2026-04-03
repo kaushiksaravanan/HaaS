@@ -21,8 +21,34 @@ class SQLTuningAgent:
 
     def analyze_statement(self, statement_string: str) -> str:
         """
-        Analyzes a specific SQL statement.
-        In a real scenario, this would use EXPLAIN PLAN and RAG.
+        Analyzes a specific SQL statement using EXPLAIN PLAN.
         """
-        # Placeholder for complex analysis logic
-        return f"Analysis for: {statement_string[:50]}... -> Suggest adding index on frequently filtered columns."
+        try:
+            explain_query = f"EXPLAIN PLAN FOR {statement_string}"
+            self.hana_client.execute_query(explain_query)
+            plan_result = self.hana_client.execute_query(
+                "SELECT OPERATOR_NAME, OPERATOR_DETAILS, TABLE_NAME, EXECUTION_ENGINE "
+                "FROM EXPLAIN_PLAN_TABLE ORDER BY OPERATOR_ID"
+            )
+            if plan_result:
+                plan_lines = []
+                for row in plan_result:
+                    op = row.get('OPERATOR_NAME', '')
+                    details = row.get('OPERATOR_DETAILS', '')
+                    table = row.get('TABLE_NAME', '')
+                    engine = row.get('EXECUTION_ENGINE', '')
+                    plan_lines.append(f"  {op} | {details} | table={table} | engine={engine}")
+                return (
+                    f"EXPLAIN PLAN for: {statement_string[:80]}...\n"
+                    + "\n".join(plan_lines)
+                )
+            return (
+                f"EXPLAIN PLAN executed for: {statement_string[:80]}... "
+                "but returned no plan rows. The statement may be invalid or unsupported."
+            )
+        except Exception as e:
+            return (
+                f"Could not analyze statement: {statement_string[:80]}...\n"
+                f"EXPLAIN PLAN failed: {str(e)}\n"
+                "Check that the SQL syntax is valid and the referenced tables exist."
+            )

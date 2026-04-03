@@ -4,6 +4,8 @@ Uses remote_exec_server_v2.py endpoints for all diagnostic operations.
 """
 
 import os
+import csv
+import io
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -46,11 +48,50 @@ class InstanceDiagnostics:
         if not self.executor.is_configured():
             logger.warning("HTTP executor not configured - diagnostics may fail")
 
+    @staticmethod
+    def _parse_sapcontrol_processes(output: str) -> List[Dict[str, str]]:
+        """Parse sapcontrol GetProcessList output into structured process list.
+
+        sapcontrol output format:
+            <timestamp>
+            GetProcessList
+            OK
+            name, description, dispstatus, textstatus, starttime, elapsedtime, pid
+            hdbdaemon, HDB Daemon, GREEN, Running, 2026 03 01 ..., 0:00:00, 12345
+            ...
+
+        Returns:
+            list of dicts with name, description, status, text_status, pid, etc.
+        """
+        processes = []
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Process lines contain a dispstatus color keyword
+            if any(color in line for color in ("GREEN", "YELLOW", "GRAY", "RED")):
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 4:
+                    proc = {
+                        "name": parts[0],
+                        "description": parts[1],
+                        "status": parts[2],       # GREEN / YELLOW / GRAY / RED
+                        "text_status": parts[3],   # Running / Starting / Stopped …
+                    }
+                    if len(parts) >= 5:
+                        proc["start_time"] = parts[4]
+                    if len(parts) >= 6:
+                        proc["elapsed"] = parts[5]
+                    if len(parts) >= 7:
+                        proc["pid"] = parts[6]
+                    processes.append(proc)
+        return processes
+
     def check_hana_process_status(self) -> Dict[str, Any]:
         """Check HANA process status using remote diagnostics.
 
         Returns:
-            dict with status and process details
+            dict with status, severity, and parsed process list
         """
         logger.info("Checking HANA process status via HTTP API")
 
@@ -71,37 +112,37 @@ class InstanceDiagnostics:
             output = process_check.get("output", "")
             status = process_check.get("status", "error")
 
-            if status != "success":
-                # Check if output has process info even on non-zero exit
-                has_green = "GREEN" in output
-                has_processes = "hdbdaemon" in output.lower() or "hdbnameserver" in output.lower()
-                if has_processes:
-                    all_green = has_green and "GRAY" not in output and "YELLOW" not in output
-                    severity = "ok" if all_green else "warning"
-                    return {
-                        "status": "success",
-                        "check": "process_status",
-                        "severity": severity,
-                        "all_green": all_green,
-                        "message": output
-                    }
+            # Parse process lines regardless of exit code
+            # (sapcontrol returns exit 1 when any process is YELLOW)
+            processes = self._parse_sapcontrol_processes(output)
+
+            if not processes and status != "success":
                 error_msg = process_check.get("error") or output or "Process check failed"
                 return {
                     "status": "error",
                     "check": "process_status",
                     "error": error_msg,
-                    "severity": "critical"
+                    "severity": "critical",
+                    "processes": [],
                 }
 
-            all_green = "GREEN" in output and "GRAY" not in output and "YELLOW" not in output
-            severity = "ok" if all_green else "warning"
+            statuses = {p["status"] for p in processes}
+            if statuses <= {"GREEN"}:
+                severity = "ok"
+            elif "RED" in statuses or "GRAY" in statuses:
+                severity = "critical"
+            else:
+                severity = "warning"
+
+            all_green = severity == "ok"
 
             return {
                 "status": "success",
                 "check": "process_status",
                 "severity": severity,
                 "all_green": all_green,
-                "message": output
+                "processes": processes,
+                "message": f"{len(processes)} processes — {'all GREEN' if all_green else ', '.join(sorted(statuses))}",
             }
 
         except Exception as e:
@@ -110,7 +151,8 @@ class InstanceDiagnostics:
                 "status": "error",
                 "check": "process_status",
                 "error": str(e),
-                "severity": "critical"
+                "severity": "critical",
+                "processes": [],
             }
 
     def check_hdb_info(self) -> Dict[str, Any]:
@@ -463,19 +505,131 @@ class InstanceDiagnostics:
         """
         logger.info("Checking backup status via HTTP API")
 
+        def _fallback_backup_catalog_query() -> Dict[str, Any]:
+            """Fallback: query M_BACKUP_CATALOG directly via /execute."""
+            sql = (
+                "SELECT TOP 1 ENTRY_TYPE_NAME, SYS_START_TIME, SYS_END_TIME, STATE_NAME "
+                "FROM M_BACKUP_CATALOG "
+                "WHERE ENTRY_TYPE_NAME='complete data backup' "
+                "ORDER BY SYS_END_TIME DESC"
+            )
+            cmd = f'hdbsql -U DEFAULT "{sql}"'
+
+            cmd_result = self.executor.execute_command(cmd, timeout=30)
+            if cmd_result.get("status") != "success" or cmd_result.get("exit_code", 1) != 0:
+                return {
+                    "status": "error",
+                    "error": cmd_result.get("error") or "Fallback backup catalog query failed",
+                }
+
+            raw_output = (cmd_result.get("output") or "").strip()
+            if not raw_output:
+                return {
+                    "status": "error",
+                    "error": "Backup catalog query returned empty output",
+                }
+
+            lines = [
+                line.strip()
+                for line in raw_output.splitlines()
+                if line.strip()
+                and "row selected" not in line.lower()
+                and "rows selected" not in line.lower()
+            ]
+            if len(lines) < 2:
+                return {
+                    "status": "warning",
+                    "message": "No complete data backup entries found in M_BACKUP_CATALOG",
+                    "row": {},
+                }
+
+            try:
+                reader = csv.reader(io.StringIO("\n".join(lines)))
+                headers = [h.strip().strip('"') for h in next(reader)]
+                values = [v.strip().strip('"') for v in next(reader)]
+                row = {
+                    headers[i]: (values[i] if i < len(values) else "")
+                    for i in range(len(headers))
+                }
+            except Exception as parse_err:
+                return {
+                    "status": "error",
+                    "error": f"Failed to parse backup catalog output: {parse_err}",
+                }
+
+            return {
+                "status": "success",
+                "row": row,
+            }
+
         try:
             result = self.executor.get_backup_status()
 
-            if result.get("status") != "success":
+            endpoint_ok = result.get("status") == "success"
+            data = result.get("data", {}) if endpoint_ok else {}
+            backup_dirs = data.get("backup_directories", {}) if isinstance(data, dict) else {}
+
+            # Detect broken/legacy payloads that don't include usable backup info.
+            # Example observed: endpoint timeout or nested status=error payload.
+            endpoint_usable = False
+            if isinstance(backup_dirs, dict):
+                endpoint_status = str(backup_dirs.get("status", "")).lower()
+                backups = backup_dirs.get("backups", backup_dirs)
+                if isinstance(backups, dict):
+                    nested_status = str(backups.get("status", "")).lower()
+                    has_legacy = "data_backup" in backups or "log_backup" in backups
+                    has_latest = "latest_data_backup" in backups
+                    endpoint_usable = has_legacy or has_latest
+
+                    # Explicit nested error from remote endpoint => force fallback.
+                    if nested_status == "error":
+                        endpoint_usable = False
+
+                if endpoint_status == "error":
+                    endpoint_usable = False
+
+            if not endpoint_ok or not endpoint_usable:
+                fb = _fallback_backup_catalog_query()
+
+                if fb.get("status") == "success":
+                    row = fb.get("row", {})
+                    state = str(row.get("STATE_NAME", "")).strip()
+                    entry_type = row.get("ENTRY_TYPE_NAME", "complete data backup")
+                    end_time = row.get("SYS_END_TIME", "unknown time")
+                    sev = "ok" if state.lower() == "successful" else "warning"
+
+                    return {
+                        "status": "success",
+                        "check": "backup_status",
+                        "severity": sev,
+                        "backup_info": {
+                            "latest_data_backup": {
+                                "entry_type": entry_type,
+                                "state": state,
+                                "start_time": row.get("SYS_START_TIME", ""),
+                                "end_time": end_time,
+                                "exists": True,
+                                "source": "fallback_sql_query",
+                            }
+                        },
+                        "message": f"Last data backup: {state or 'unknown'} (ended {end_time})",
+                    }
+
+                if fb.get("status") == "warning":
+                    return {
+                        "status": "warning",
+                        "check": "backup_status",
+                        "error": fb.get("message", "No backup entries found"),
+                        "severity": "info",
+                    }
+
                 return {
                     "status": "warning",
                     "check": "backup_status",
-                    "error": "Unable to retrieve backup status",
-                    "severity": "info"
+                    "error": fb.get("error", "Unable to retrieve backup status"),
+                    "severity": "info",
                 }
 
-            data = result.get("data", {})
-            backup_dirs = data.get("backup_directories", {})
             backups = backup_dirs.get("backups", backup_dirs)
 
             data_backup = backups.get("data_backup", {})

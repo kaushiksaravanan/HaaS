@@ -29,7 +29,7 @@ class Config:
     GOOGLE_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
     # ADK model
-    MODEL = os.getenv("ADK_MODEL", "gemini-2.0-flash")
+    MODEL = os.getenv("ADK_MODEL", "openai/gpt-4o")
 
     @classmethod
     def summary(cls) -> dict:

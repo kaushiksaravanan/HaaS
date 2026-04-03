@@ -9,8 +9,6 @@ const navigation = [
   { name: 'Instance Approvals', href: '/instance-approvals', icon: CheckSquare },
   { name: 'Agent Flow', href: '/agent-flow', icon: GitBranch },
   { name: 'Agent Chat', href: '/agent-chat', icon: MessageSquare },
-  { name: 'Incidents', href: '/incidents', icon: AlertTriangle },
-  { name: 'Risk Budget', href: '/risk-budget', icon: Shield },
   { name: 'Monitoring', href: '/monitoring', icon: Activity },
 ]
 
@@ -25,20 +23,32 @@ export default function Layout() {
     lastUpdated: null,
   })
 
+  const autoReconnectTriggered = useState(false)
+
   useEffect(() => {
     const checkStatus = async () => {
       try {
         const response = await metricsAPI.getRealtime()
         const data = response.data || {}
 
+        const dbConnected = data.database_connected ?? false
+
         setSystemStatus({
           apiConnected: true,
-          dbConnected: data.database_connected ?? false,
+          dbConnected,
           checking: false,
           systemId: data.system_id || null,
           instanceName: data.system_id || data.instance_name || null,
           lastUpdated: data.timestamp || new Date().toISOString(),
         })
+
+        // Auto-reconnect if API is up but DB is not connected (once)
+        if (!dbConnected && !autoReconnectTriggered[0]) {
+          autoReconnectTriggered[1](true)
+          try {
+            await metricsAPI.autoReconnect()
+          } catch { /* ignore — best effort */ }
+        }
       } catch (error) {
         // API is down
         setSystemStatus({
@@ -72,7 +82,7 @@ export default function Layout() {
           </div>
           <div>
             <h1 className="font-serif text-xl font-semibold text-foreground tracking-tight">
-              HANA Sentinel
+              HANA Ops agent
             </h1>
             <p className="font-mono text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
               AI Operations

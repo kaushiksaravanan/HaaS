@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # Domains the browse agent is allowed to visit (can be expanded via env var)
 _DEFAULT_ALLOWED_DOMAINS = [
     "support.sap.com", "me.sap.com", "launchpad.support.sap.com", "help.sap.com",
+    "community.sap.com",
     "stackoverflow.com", "github.com", "docs.python.org", "developer.mozilla.org",
     "wikipedia.org", "medium.com", "dev.to", "techcommunity.microsoft.com",
 ]
@@ -53,6 +54,11 @@ _SEARXNG_INSTANCES = [
 _REQUEST_TIMEOUT = 15  # seconds
 _MAX_CONTENT_LENGTH = 6000  # chars per page to keep LLM context manageable
 
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+
 
 def _is_domain_allowed(url: str, allow_all: bool = False) -> bool:
     """Check if a URL belongs to an allowed domain."""
@@ -74,8 +80,55 @@ def _build_search_urls(query: str) -> List[str]:
     ]
 
 
+def _fetch_with_profile(url: str) -> Optional[Dict]:
+    """Try fetching a page using browser-use with the user's Chrome profile.
+
+    This carries all cookies/sessions so SAP Community etc. won't 403.
+    Returns None if browser-use is unavailable or fails.
+    """
+    try:
+        import asyncio
+        from browser_use import BrowserSession
+        from ..agents.browser_agent import _chrome_profile
+
+        async def _do_fetch():
+            session = BrowserSession(browser_profile=_chrome_profile())
+            await session.start()
+            try:
+                page = await session.get_current_page()
+                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                html = await page.content()
+                return html
+            finally:
+                await session.stop()
+
+        loop = asyncio.new_event_loop()
+        html = loop.run_until_complete(_do_fetch())
+        loop.close()
+
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            tag.decompose()
+
+        title = soup.title.get_text(strip=True) if soup.title else ""
+        main = soup.find("main") or soup.find("article") or soup.find(id="content") or soup.body
+        text = main.get_text(separator="\n", strip=True) if main else ""
+        if len(text) > _MAX_CONTENT_LENGTH:
+            text = text[:_MAX_CONTENT_LENGTH] + "\n[... truncated]"
+
+        if text.strip():
+            return {"url": url, "title": title, "content": text, "status": "ok"}
+        return None
+    except Exception as exc:
+        logger.debug(f"browser-use profile fetch failed for {url}: {exc}")
+        return None
+
+
 def fetch_page(url: str, allow_all_domains: bool = False) -> Dict:
     """Fetch a single page and extract its text content.
+
+    Tries browser-use with the user's Chrome profile first (carries SAP cookies),
+    falls back to plain requests.
 
     Args:
         url: The URL to fetch
@@ -87,13 +140,20 @@ def fetch_page(url: str, allow_all_domains: bool = False) -> Dict:
     if not _is_domain_allowed(url, allow_all=allow_all_domains):
         return {"url": url, "title": "", "content": "", "status": "blocked_domain"}
 
+    # Try Playwright with user's Chrome profile (has SAP session cookies)
+    result = _fetch_with_profile(url)
+    if result:
+        return result
+
+    # Fallback to plain requests
     try:
         resp = requests.get(
             url,
             timeout=_REQUEST_TIMEOUT,
             headers={
-                "User-Agent": "HANA-Sentinel-Browse/1.0",
-                "Accept": "text/html,application/xhtml+xml",
+                "User-Agent": _BROWSER_UA,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
             },
         )
         resp.raise_for_status()
@@ -134,8 +194,8 @@ def search_sap_docs(query: str, max_results: int = 3) -> List[Dict]:
                 search_url,
                 timeout=_REQUEST_TIMEOUT,
                 headers={
-                    "User-Agent": "HANA-Sentinel-Browse/1.0",
-                    "Accept": "text/html,application/xhtml+xml",
+                    "User-Agent": _BROWSER_UA,
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 },
             )
             if resp.status_code != 200:
@@ -184,7 +244,7 @@ def search_searxng(query: str, max_results: int = 5) -> List[Dict]:
                     "categories": "general",
                 },
                 timeout=_REQUEST_TIMEOUT,
-                headers={"User-Agent": "HANA-Sentinel-Browse/1.0"},
+                headers={"User-Agent": _BROWSER_UA},
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -260,7 +320,7 @@ def search_duckduckgo(query: str, max_results: int = 5) -> List[Dict]:
                 "skip_disambig": 1,
             },
             timeout=_REQUEST_TIMEOUT,
-            headers={"User-Agent": "HANA-Sentinel-Browse/1.0"},
+            headers={"User-Agent": _BROWSER_UA},
         )
         if resp.status_code == 200:
             data = resp.json()

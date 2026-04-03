@@ -1,8 +1,5 @@
 # HANA Database Agent Execution Guide
 
-## Overview
-This guide is for AI agents monitoring a 24/7 running HANA database system. It contains SAFE, READ-ONLY diagnostic operations and references to healing scripts for APPROVED issues only.
-
 ## ⚠️ CRITICAL SAFETY RULES
 
 1. **NEVER run destructive operations without explicit approval**

@@ -11,7 +11,9 @@ class RecoveryAgent:
         """
         Restarts a HANA service using sapcontrol via remote exec server.
         """
-        command = f"sapcontrol -nr 00 -function RestartService {service_name}"
+        import os
+        _nr = os.getenv("HANA_INSTANCE_NR", os.getenv("GCP_TOOLKIT_INSTANCE_NUMBER", "02"))
+        command = f"sapcontrol -nr {_nr} -function RestartService {service_name}"
         try:
             result = execute_remote_command(command, admin_override=True)
             output = result.get("stdout", "")

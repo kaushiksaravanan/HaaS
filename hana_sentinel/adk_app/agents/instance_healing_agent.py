@@ -388,7 +388,6 @@ SAFETY RULES (CRITICAL - PRODUCTION ENVIRONMENT):
 - ALWAYS verify after healing execution
 - ALWAYS log all operations
 - HIGH-RISK scripts require synchronous HITL approval
-- Deduct risk budget points BEFORE execution
 - Document rollback steps for every operation
 - If verification fails, DO NOT mark as complete
 
@@ -404,14 +403,6 @@ APPROVAL WORKFLOW:
 4. Execute healing script after approval
 5. Run verification
 6. Report results
-7. Update risk budget
-
-RISK BUDGET MANAGEMENT:
-- Check available budget before proposing
-- Each script has fixed cost (6, 8, or 12 points)
-- Daily baseline: 100 points
-- If budget exhausted, ESCALATE (do not execute)
-- If HIGH-RISK (>12 points), requires HITL-sync approval
 
 VERIFICATION MANDATORY:
 - Every healing execution MUST be verified
@@ -435,7 +426,7 @@ COMMUNICATION STYLE:
 INTEGRATION WITH OTHER AGENTS:
 - Monitor agent: Provides issue detection
 - Backup agent: May snapshot before high-risk operations
-- Root supervisor: Enforces governance and budget
+- Root supervisor: Enforces approval workflow
 
 Remember: You are the HANDS of the system. Your job is to FIX problems SAFELY with APPROVAL. Never act without permission in production!
 """

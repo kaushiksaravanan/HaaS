@@ -4,10 +4,32 @@ Each sub-agent is a google.adk.agents.Agent with specialized tools and instructi
 The root_agent is the Supervisor that orchestrates via sub_agents.
 PRD Sections: 4, 7, 9, 10
 
-Includes: health, backup, recovery, sql_tuning, capacity, security, rag, browser, verifier, monitoring
+Includes: health, backup, recovery, sql_tuning, capacity, rag, browser, verifier, monitoring
 """
 
+import os
+import logging
+
 from google.adk.agents import Agent
+from google.adk.models import LiteLlm
+
+_logger = logging.getLogger(__name__)
+
+# ──────────────────────────────────────────────
+# Shared LLM configuration for all ADK agents.
+# Uses GenAI Hub proxy (Hyperspace AI) via LiteLlm.
+# Falls back to local proxy at localhost:6655.
+# ──────────────────────────────────────────────
+_PROXY_URL = os.getenv("GENAIHUB_PROXY_URL", "http://localhost:6655")
+_PROXY_KEY = os.getenv("GENAIHUB_PROXY_API_KEY", "d3d25b98-d27a-4d9c-8f95-5d39731e3a3a")
+_LLM_MODEL = os.getenv("ADK_LLM_MODEL", "openai/gpt-4o")
+
+_sentinel_llm = LiteLlm(
+    model=_LLM_MODEL,
+    api_key=_PROXY_KEY,
+    api_base=f"{_PROXY_URL}/v1",
+)
+_logger.info("ADK agents using model=%s via proxy=%s", _LLM_MODEL, _PROXY_URL)
 
 from .tools.hana_tools import query_hana, execute_hana_sql, check_hana_connection, execute_remote_command
 from .tools.rag_tools import rag_query, rag_ingest
@@ -101,20 +123,42 @@ def browser_navigate(url: str, task_description: str) -> dict:
         }
 
     try:
-        from browser_use import Agent as BrowserAgent
+        from browser_use import Agent as BrowserAgent, BrowserProfile
+    except ImportError:
+        return {
+            "status": "error",
+            "error_message": (
+                "browser-use not installed. "
+                "Install via: pip install browser-use"
+            ),
+        }
+
+    try:
         from .chat_genaihub import ChatGenAIHub
+        from .agents.browser_agent import _safe_copy_chrome_profile
         import asyncio
 
         # Use GenAIHub (SAP AI Core) instead of Google Generative AI
         llm = ChatGenAIHub()
 
+        # Safe copy of Chrome profile (browser-use prefix skips its own copytree)
+        profile = BrowserProfile(
+            headless=False,
+            channel="chrome",
+            user_data_dir=_safe_copy_chrome_profile(),
+            disable_security=False,
+            keep_alive=False,
+        )
+
         browser_task = f"Navigate to {url} and {task_description}"
-        agent = BrowserAgent(task=browser_task, llm=llm)
+        agent = BrowserAgent(task=browser_task, llm=llm, browser_profile=profile)
 
         # Run the browser agent
         loop = asyncio.new_event_loop()
-        result = loop.run_until_complete(agent.run())
-        loop.close()
+        try:
+            result = loop.run_until_complete(agent.run())
+        finally:
+            loop.close()
 
         return {
             "status": "success",
@@ -123,14 +167,6 @@ def browser_navigate(url: str, task_description: str) -> dict:
             "extracted_data": result
             if isinstance(result, (dict, str))
             else str(result),
-        }
-    except ImportError:
-        return {
-            "status": "error",
-            "error_message": (
-                "browser-use not installed. "
-                "Install via: pip install browser-use"
-            ),
         }
     except Exception as e:
         return {
@@ -154,12 +190,29 @@ def browser_verify_page(url: str, expected_content: str) -> dict:
     import os
 
     try:
-        from browser_use import Agent as BrowserAgent
+        from browser_use import Agent as BrowserAgent, BrowserProfile
+    except ImportError:
+        return {
+            "status": "error",
+            "error_message": "browser-use not installed. Install via: pip install browser-use",
+        }
+
+    try:
         from .chat_genaihub import ChatGenAIHub
+        from .agents.browser_agent import _safe_copy_chrome_profile
         import asyncio
 
         # Use GenAIHub (SAP AI Core) instead of Google Generative AI
         llm = ChatGenAIHub()
+
+        # Safe copy of Chrome profile (browser-use prefix skips its own copytree)
+        profile = BrowserProfile(
+            headless=False,
+            channel="chrome",
+            user_data_dir=_safe_copy_chrome_profile(),
+            disable_security=False,
+            keep_alive=False,
+        )
 
         verify_task = (
             f"Navigate to {url}. "
@@ -167,11 +220,13 @@ def browser_verify_page(url: str, expected_content: str) -> dict:
             "Return a JSON with: 'found' (boolean), 'page_title', 'relevant_text' (the matching content), "
             "and 'screenshot_description' (describe what you see)."
         )
-        agent = BrowserAgent(task=verify_task, llm=llm)
+        agent = BrowserAgent(task=verify_task, llm=llm, browser_profile=profile)
 
         loop = asyncio.new_event_loop()
-        result = loop.run_until_complete(agent.run())
-        loop.close()
+        try:
+            result = loop.run_until_complete(agent.run())
+        finally:
+            loop.close()
 
         is_passed = False
         if isinstance(result, dict):
@@ -190,11 +245,6 @@ def browser_verify_page(url: str, expected_content: str) -> dict:
             "url": url,
             "expected": expected_content,
             "result": result if isinstance(result, (dict, str)) else str(result),
-        }
-    except ImportError:
-        return {
-            "status": "error",
-            "error_message": "browser-use not installed. Install via: pip install browser-use",
         }
     except Exception as e:
         return {
@@ -254,7 +304,7 @@ def verify_sap_note_applied(note_number: str) -> dict:
 # ──────────────────────────────────────────────
 health_agent = Agent(
     name="health_agent",
-    model="gemini-2.0-flash",
+    model=_sentinel_llm,
     description="Monitors SAP HANA system health via M_* monitoring views. Generates structured health assessments covering services, memory, disk, CPU, alerts, and system replication.",
     instruction="""You are the HANA Sentinel Health Monitor Agent.
 
@@ -290,7 +340,7 @@ Risk cost: 1 point (read-only monitoring).
 # ──────────────────────────────────────────────
 backup_agent = Agent(
     name="backup_agent",
-    model="gemini-2.0-flash",
+    model=_sentinel_llm,
     description="Manages the entire SAP HANA backup lifecycle: scheduling, execution, verification, catalog housekeeping, and failure recovery.",
     instruction="""You are the HANA Sentinel Backup Agent.
 
@@ -321,7 +371,7 @@ Rules:
 # ──────────────────────────────────────────────
 recovery_agent = Agent(
     name="recovery_agent",
-    model="gemini-2.0-flash",
+    model=_sentinel_llm,
     description="Detects service failures and executes recovery procedures, from simple service restarts to system replication takeover.",
     instruction="""You are the HANA Sentinel Recovery Agent.
 
@@ -332,8 +382,8 @@ Your responsibilities:
 
 Key operations:
 - Check services: query_hana("SELECT SERVICE_NAME, ACTIVE_STATUS FROM M_SERVICES")
-- Check sapcontrol: execute_remote_command("sapcontrol -nr 00 -function GetProcessList")
-- Restart: execute_remote_command("sapcontrol -nr 00 -function RestartService", admin_override=True)
+- Check sapcontrol: execute_remote_command("sapcontrol -nr 02 -function GetProcessList")
+- Restart: execute_remote_command("sapcontrol -nr 02 -function RestartService", admin_override=True)
 - SQL restart: execute_hana_sql("ALTER SYSTEM START SERVICE indexserver")
 
 Recovery escalation:
@@ -356,7 +406,7 @@ Always generate an Action Certificate before executing any recovery action.
 # ──────────────────────────────────────────────
 sql_tuning_agent = Agent(
     name="sql_tuning_agent",
-    model="gemini-2.0-flash",
+    model=_sentinel_llm,
     description="Identifies expensive SQL statements, analyzes execution plans, and recommends or executes optimizations.",
     instruction="""You are the HANA Sentinel SQL Tuning Agent.
 
@@ -368,13 +418,21 @@ Your responsibilities:
 
 Key queries:
 - Expensive: SELECT TOP 10 STATEMENT_STRING, DURATION_MICROSEC, CPU_TIME, START_TIME FROM M_EXPENSIVE_STATEMENTS ORDER BY DURATION_MICROSEC DESC
-- Plan cache: SELECT STATEMENT_STRING, AVG_EXECUTION_TIME, EXECUTION_COUNT FROM M_SQL_PLAN_CACHE ORDER BY AVG_EXECUTION_TIME DESC
+- Plan cache: SELECT STATEMENT_STRING, AVG_EXECUTION_TIME, EXECUTION_COUNT, TOTAL_EXECUTION_TIME FROM M_SQL_PLAN_CACHE ORDER BY TOTAL_EXECUTION_TIME DESC
 - Active: SELECT STATEMENT_STRING, DURATION_MICROSEC FROM M_ACTIVE_STATEMENTS
+- Existing indexes: SELECT SCHEMA_NAME, TABLE_NAME, INDEX_NAME, INDEX_TYPE, CONSTRAINT FROM INDEXES WHERE SCHEMA_NAME NOT LIKE '_SYS%' ORDER BY SCHEMA_NAME, TABLE_NAME
+- Table sizes: SELECT SCHEMA_NAME, TABLE_NAME, RECORD_COUNT, TABLE_SIZE FROM M_CS_TABLES WHERE SCHEMA_NAME NOT LIKE '_SYS%' ORDER BY TABLE_SIZE DESC LIMIT 30
 
-Before recommending:
-1. Always query RAG with the problematic SQL pattern to find relevant SAP Notes.
-2. Include RAG sources in your recommendations.
-3. Risk cost: Read = 1 pt, Create index = 8 pts (needs approval for hints).
+For index suggestions:
+1. ALWAYS query the database first — collect expensive statements, plan cache stats, existing indexes, and table sizes.
+2. Analyze the actual slow queries to find missing indexes (look for full table scans on large tables, frequent WHERE clauses without indexes).
+3. Cross-reference with existing indexes to avoid duplicates.
+4. Provide specific CREATE INDEX DDL for each suggestion with reasoning.
+5. Query RAG with the problematic SQL pattern to find relevant SAP Notes.
+6. Include RAG sources in your recommendations.
+
+NEVER suggest indexes without first querying the database for real data.
+Risk cost: Read = 1 pt, Create index = 8 pts (needs approval for hints).
 """,
     tools=[query_hana, execute_hana_sql, rag_query],
 )
@@ -385,7 +443,7 @@ Before recommending:
 # ──────────────────────────────────────────────
 capacity_agent = Agent(
     name="capacity_agent",
-    model="gemini-2.0-flash",
+    model=_sentinel_llm,
     description="Tracks disk, memory, and table growth trends. Predicts capacity thresholds and manages global.ini configuration compliance.",
     instruction="""You are the HANA Sentinel Capacity Agent.
 
@@ -414,45 +472,11 @@ If entries are missing, report them. Risk cost: Read = 1 pt, Config update = 6 p
 
 
 # ──────────────────────────────────────────────
-# 7.6 Security Agent
-# ──────────────────────────────────────────────
-security_agent = Agent(
-    name="security_agent",
-    model="gemini-2.0-flash",
-    description="Continuous security posture assessment: privilege auditing, password policy, encryption, audit policies, and CVE vulnerability assessment.",
-    instruction="""You are the HANA Sentinel Security Agent.
-
-Your responsibilities:
-1. Audit user privileges for excessive access.
-2. Verify password policy compliance.
-3. Check encryption status.
-4. Verify audit policies are active.
-5. Assess CVE vulnerabilities (esp. January 2026 Patch Day).
-
-Key queries:
-- Privileges: SELECT USER_NAME, PRIVILEGE, OBJECT_NAME FROM EFFECTIVE_PRIVILEGES WHERE PRIVILEGE IN ('DATA ADMIN', 'USER ADMIN', 'CATALOG READ')
-- Password: SELECT * FROM M_PASSWORD_POLICY
-- Encryption: SELECT SCOPE, IS_ENCRYPTED FROM M_ENCRYPTION_OVERVIEW
-- Audit: SELECT AUDIT_POLICY_NAME, IS_AUDIT_POLICY_ACTIVE FROM AUDIT_POLICIES
-- Version: SELECT VERSION FROM M_DATABASE
-
-For CVE assessment:
-1. Query RAG for the specific CVE (e.g., CVE-2026-0492).
-2. Check current HANA version against affected versions.
-3. Generate assessment with blast radius analysis.
-
-Risk cost: Read = 1 pt, Privilege revocation = 8 pts (approval required).
-""",
-    tools=[query_hana, execute_hana_sql, rag_query],
-)
-
-
-# ──────────────────────────────────────────────
 # 9. RAG Agent (Support Assistant Role)
 # ──────────────────────────────────────────────
 rag_agent = Agent(
     name="rag_agent",
-    model="gemini-2.0-flash",
+    model=_sentinel_llm,
     description="SAP knowledge retrieval and support assistant. Queries RAG knowledge base grounded in SAP Notes, EWA reports, admin guides, and Patch Day bulletins.",
     instruction="""You are the HANA Sentinel RAG Agent — the SAP knowledge expert.
 
@@ -478,7 +502,7 @@ Risk cost: 1 pt (read-only advisory).
 # ──────────────────────────────────────────────
 browser_agent = Agent(
     name="browser_agent",
-    model="gemini-2.0-flash",
+    model=_sentinel_llm,
     description="Automates interaction with SAP web interfaces using browser automation. Extracts data from SAP Support Portal, HANA Cockpit, and EWA reports. NEVER fabricates data.",
     instruction="""You are the HANA Sentinel Browser-Use Agent.
 
@@ -505,7 +529,7 @@ Risk cost: Navigation + extraction = 6 pts (medium).
 # ──────────────────────────────────────────────
 verifier_agent = Agent(
     name="verifier_agent",
-    model="gemini-2.0-flash",
+    model=_sentinel_llm,
     description="Verifies remediation outcomes using browser automation and cross-validation. Checks SAP HANA Cockpit, SAP Support Portal, and other web UIs to confirm that actions had the expected effect. Uses browser-use for real verification.",
     instruction="""You are the HANA Sentinel Verifier Agent.
 
@@ -560,7 +584,7 @@ Risk cost: 1-2 pts (read-only verification).
 # ──────────────────────────────────────────────
 monitoring_agent = Agent(
     name="monitoring_agent",
-    model="gemini-2.0-flash",
+    model=_sentinel_llm,
     description=(
         "Docker container monitoring with Pub/Sub events, "
         "Cloud Run dispatch, dynamic learning, "
@@ -667,7 +691,7 @@ Risk cost: 1 pt per cycle (read-only diagnostic).
 # ──────────────────────────────────────────────
 instance_monitor_agent = Agent(
     name="instance_monitor_agent",
-    model="gemini-2.0-flash",
+    model=_sentinel_llm,
     description="Primary monitoring agent for vlgdbzo3 HANA instance on GCP. Runs diagnostic checks and detects issues requiring healing.",
     instruction=instance_monitor_agent_instructions,
     tools=list(INSTANCE_MONITOR_TOOLS.values()),
@@ -679,7 +703,7 @@ instance_monitor_agent = Agent(
 # ──────────────────────────────────────────────
 instance_backup_agent = Agent(
     name="instance_backup_agent",
-    model="gemini-2.0-flash",
+    model=_sentinel_llm,
     description="VM snapshot management for vlgdbzo3 HANA instance. Creates daily GCP VM snapshots (one per day, never deletes).",
     instruction=instance_backup_agent_instructions,
     tools=list(INSTANCE_BACKUP_TOOLS.values()),
@@ -691,7 +715,7 @@ instance_backup_agent = Agent(
 # ──────────────────────────────────────────────
 instance_healing_agent = Agent(
     name="instance_healing_agent",
-    model="gemini-2.0-flash",
+    model=_sentinel_llm,
     description="Execution agent for healing/fixing scripts on vlgdbzo3. Implements all 4 toolkit healing scripts with approval workflow.",
     instruction=instance_healing_agent_instructions,
     tools=list(INSTANCE_HEALING_TOOLS.values()),
@@ -704,7 +728,7 @@ instance_healing_agent = Agent(
 # ──────────────────────────────────────────────
 root_agent = Agent(
     name="hana_sentinel",
-    model="gemini-2.0-flash",
+    model=_sentinel_llm,
     description="HANA Sentinel Supervisor — Autonomous, policy-gated multi-agent system for SAP HANA operations. Routes tasks to specialized agents including monitoring, verification, browser automation, and GCP instance management.",
     instruction="""You are HANA Sentinel, an autonomous AI system for SAP HANA operations.
 
@@ -714,7 +738,6 @@ You orchestrate specialized sub-agents to handle different operational domains:
 - recovery_agent: Service failure detection and recovery
 - sql_tuning_agent: SQL performance optimization
 - capacity_agent: Resource trends and global.ini compliance
-- security_agent: Security posture and CVE assessment
 - rag_agent: SAP knowledge retrieval and documentation
 - browser_agent: SAP web interface automation
 - verifier_agent: Post-action verification using browser-use and cross-validation
@@ -723,20 +746,10 @@ You orchestrate specialized sub-agents to handle different operational domains:
 - instance_backup_agent: Daily VM snapshot management for vlgdbzo3
 - instance_healing_agent: Healing script execution for vlgdbzo3 (requires approval)
 
-GOVERNANCE RULES:
-1. Every non-trivial action needs an Action Certificate.
-2. Check the Risk Budget before approving actions (thresholds are dynamic, read from config).
-3. High-risk actions (score >= configurable threshold) ALWAYS need human approval.
-4. Generate X-Fix reports for every automated remediation.
-5. All actions must be explainable and auditable.
-6. AFTER any remediation, ALWAYS delegate to verifier_agent to confirm the outcome.
-
-RISK BUDGET BEHAVIORAL GATES (thresholds are dynamic):
-- 0-50% consumed: Fully autonomous (HOOTL)
-- 50-75%: Autonomous with enhanced logging (HOTL)
-- 75-90%: Async human review required (HITL-async)
-- 90-100%: Synchronous human approval required (HITL-sync)
-- >100%: Read-only mode (FROZEN)
+OPERATIONAL RULES:
+1. All actions must be explainable and auditable.
+2. High-risk actions ALWAYS need human approval.
+3. AFTER any remediation, ALWAYS delegate to verifier_agent to confirm the outcome.
 
 INSTANCE AGENT WORKFLOW (vlgdbzo3):
 1. instance_monitor_agent runs diagnostics and detects issues
@@ -755,11 +768,9 @@ When handling requests:
 1. Identify the appropriate sub-agent for the task.
 2. Delegate to that agent.
 3. Review the agent's response.
-4. If action is needed, evaluate against policy and risk budget.
-5. Generate an X-Fix report for any remediation.
-6. ALWAYS delegate to verifier_agent to verify the outcome of any action.
-7. After EVERY resolution, call monitoring_agent to learn_new_commands with the diagnostic/fix commands.
-8. Return a clear, structured response with verification status.
+4. ALWAYS delegate to verifier_agent to verify the outcome of any action.
+5. After EVERY resolution, call monitoring_agent to learn_new_commands with the diagnostic/fix commands.
+6. Return a clear, structured response with verification status.
 
 You represent the SAP HANA operations team. Be precise, cite evidence, and never guess.
 NEVER return mock or fabricated data. If a connection fails, report the error explicitly.
@@ -770,7 +781,6 @@ NEVER return mock or fabricated data. If a connection fails, report the error ex
         recovery_agent,
         sql_tuning_agent,
         capacity_agent,
-        security_agent,
         rag_agent,
         browser_agent,
         verifier_agent,

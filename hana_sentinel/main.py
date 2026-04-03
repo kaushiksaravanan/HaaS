@@ -60,17 +60,12 @@ def run_verify():
     # 2. Models
     try:
         from adk_app.models import (
-            RiskBudget,
             ActionCertificate,
-            XFixReport,
             PolicyEngine,
         )
 
-        budget = RiskBudget()
         cert = ActionCertificate(action_type="read_monitoring", created_by_agent="test")
-        xfix = XFixReport(summary="Test report")
-        decision = PolicyEngine.evaluate(cert, budget)
-        checks.append(("Models (RiskBudget, ActionCert, X-Fix, Policy)", "✅"))
+        checks.append(("Models (ActionCert, Policy)", "✅"))
     except Exception as e:
         checks.append(("Models", f"❌ {e}"))
 
@@ -144,40 +139,6 @@ def run_verify():
     passed = sum(1 for _, s in checks if s.startswith("✅"))
     print(f"\n{'=' * 50}")
     print(f"  {passed}/{len(checks)} checks passed")
-
-    # Risk Budget Demo
-    print(f"\n📊 Risk Budget Demo:")
-    budget = RiskBudget()
-    print(f"  Initial: {budget.current_points} pts, Mode: {budget.governance_mode}")
-    budget.deduct("read_monitoring", "health_agent")
-    budget.deduct("backup_execution", "backup_agent")
-    budget.deduct("service_restart", "recovery_agent")
-    print(
-        f"  After 3 ops: {budget.current_points} pts ({budget.utilization_pct:.0f}% used), Mode: {budget.governance_mode}"
-    )
-
-    # X-Fix Report Demo
-    print(f"\n📋 X-Fix Report Demo:")
-    xfix = XFixReport(
-        summary="Indexserver crash detected — automatic restart initiated",
-        trigger_event="M_SERVICES shows indexserver INACTIVE",
-        confidence_score=0.95,
-        rag_sources=["SAP Note 1999998"],
-        proposed_steps=[
-            {
-                "description": "ALTER SYSTEM START SERVICE indexserver",
-                "duration": "30s",
-            },
-            {"description": "Verify service status via M_SERVICES", "duration": "10s"},
-        ],
-        risk_score=6,
-        blast_radius="Single service",
-        budget_cost=6,
-        rollback_steps=["sapcontrol RestartService", "Manual restart via HDB"],
-        estimated_rollback_time="2 minutes",
-        verification_method="Query M_SERVICES for ACTIVE_STATUS = 'YES'",
-    )
-    print(xfix.render_text())
 
     return passed == len(checks)
 

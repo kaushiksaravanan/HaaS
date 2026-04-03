@@ -227,9 +227,65 @@ body {
 
 .browser-glow-purple {
   box-shadow:
-    0 0 0 1px rgba(168, 85, 247, 0.3),
-    0 0 20px rgba(168, 85, 247, 0.2),
-    0 0 40px rgba(168, 85, 247, 0.1);
+    0 0 0 1px rgba(0, 129, 242, 0.3),
+    0 0 20px rgba(0, 129, 242, 0.2),
+    0 0 40px rgba(0, 129, 242, 0.1);
+}
+
+/* Manus-style blue edge glow during active browsing */
+.browser-edge-glow {
+  box-shadow:
+    inset 0 2px 12px rgba(0, 129, 242, 0.35),
+    inset 0 -2px 12px rgba(0, 129, 242, 0.35),
+    inset 2px 0 12px rgba(0, 129, 242, 0.25),
+    inset -2px 0 12px rgba(0, 129, 242, 0.25);
+  transition: box-shadow 0.5s ease;
+}
+
+/* Manus-style click ripple: blue expanding circle */
+.click-ripple {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(0, 129, 242, 0.5);
+  animation: manus-ripple-expand 1.5s ease-out forwards;
+  pointer-events: none;
+}
+
+@keyframes manus-ripple-expand {
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.5;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(2.5);
+    opacity: 0;
+  }
+}
+
+/* Smooth cursor movement — Manus-style natural easing */
+.cursor-smooth {
+  transition:
+    left 0.6s cubic-bezier(0.34, 1.56, 0.64, 1),
+    top 0.6s cubic-bezier(0.34, 1.56, 0.64, 1),
+    transform 0.15s ease;
+  will-change: left, top, transform;
+}
+
+/* Cursor trail dot fade */
+.cursor-trail-dot {
+  animation: trail-fade 0.8s ease-out forwards;
+}
+
+@keyframes trail-fade {
+  0% {
+    opacity: 0.4;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.3);
+  }
 }
 
 /* Playwright cursor click effect */

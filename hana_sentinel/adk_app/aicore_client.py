@@ -16,7 +16,9 @@ logger = logging.getLogger(__name__)
 
 
 class AICoreiClient:
-    """Client for SAP AI Core (GenAIHub) LLM services."""
+    """Client for SAP AI Core (GenAIHub) LLM services.
+    Falls back to local Hyperspace AI proxy if AI Core is not configured.
+    """
 
     def __init__(self):
         """Initialize AI Core client with credentials from environment."""
@@ -28,20 +30,29 @@ class AICoreiClient:
         self.deployment_id = os.getenv("LLM_DEPLOYMENT_ID", "")
         self.model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o")
 
+        # AI proxy (Hyperspace AI) — tried first
+        self._proxy_url = os.getenv("GENAIHUB_PROXY_URL", "http://localhost:6655")
+        self._proxy_key = os.getenv("GENAIHUB_PROXY_API_KEY", "d3d25b98-d27a-4d9c-8f95-5d39731e3a3a")
+
         self._access_token = None
         self._token_expiry = None
 
-        if not all([self.base_url, self.auth_url, self.client_id, self.client_secret]):
-            logger.warning("AI Core credentials not fully configured")
+        # Determine which backends are available
+        self._proxy_available = bool(self._proxy_url and self._proxy_key)
+        self._aicore_available = all([self.base_url, self.auth_url, self.client_id, self.client_secret])
+
+        if self._proxy_available and self._aicore_available:
+            logger.info("Both AI proxy (%s) and AI Core (%s) configured — proxy-first with AI Core fallback", self._proxy_url, self.base_url)
+        elif self._proxy_available:
+            logger.info("AI proxy configured at %s (no AI Core fallback)", self._proxy_url)
+        elif self._aicore_available:
+            logger.info("AI Core configured at %s (no proxy)", self.base_url)
+        else:
+            logger.warning("No LLM backend configured")
 
     def is_configured(self) -> bool:
-        """Check if AI Core is properly configured."""
-        return bool(
-            self.base_url
-            and self.auth_url
-            and self.client_id
-            and self.client_secret
-        )
+        """Check if any LLM backend is available (AI proxy or AI Core)."""
+        return self._proxy_available or self._aicore_available
 
     def _get_access_token(self) -> str:
         """Get or refresh OAuth access token."""
@@ -80,27 +91,87 @@ class AICoreiClient:
             logger.error(f"Error getting access token: {e}")
             raise
 
+    def _proxy_chat_completion(
+        self,
+        messages: list,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        model: Optional[str] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Send chat completion to local Hyperspace AI proxy (OpenAI-compatible)."""
+        endpoint = f"{self._proxy_url}/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self._proxy_key}",
+            "Content-Type": "application/json",
+        }
+        use_model = model or self.model_name
+        payload = {
+            "model": use_model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        try:
+            logger.info("Sending chat completion to AI proxy: %s (model=%s)", endpoint, use_model)
+            response = requests.post(endpoint, json=payload, headers=headers, timeout=60)
+
+            if response.status_code == 200:
+                result = response.json()
+                choice = result.get("choices", [{}])[0]
+                message = choice.get("message", {})
+                return {
+                    "content": message.get("content", ""),
+                    "usage": result.get("usage", {}),
+                    "model": result.get("model", self.model_name),
+                    "finish_reason": choice.get("finish_reason", ""),
+                }
+            else:
+                logger.error("Local proxy request failed: %s - %s", response.status_code, response.text[:300])
+                raise Exception(f"Local proxy request failed: {response.status_code}")
+        except Exception as e:
+            logger.error("Error in proxy chat completion: %s", e)
+            raise
+
     def chat_completion(
         self,
         messages: list,
         temperature: float = 0.7,
         max_tokens: int = 2048,
+        model: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
-        Send chat completion request to AI Core.
+        Send chat completion request to AI Core or local proxy fallback.
 
         Args:
             messages: List of message dicts with 'role' and 'content'
             temperature: Sampling temperature (0.0 to 1.0)
             max_tokens: Maximum tokens to generate
+            model: Optional model override (e.g. 'anthropic--claude-4.6-sonnet')
             **kwargs: Additional model parameters
 
         Returns:
             dict with 'content' and 'usage' information
         """
         if not self.is_configured():
-            raise Exception("AI Core not configured")
+            raise Exception("No LLM backend configured")
+
+        # Strategy: try AI proxy first, fall back to AI Core on failure/timeout
+        proxy_error = None
+        if self._proxy_available:
+            try:
+                return self._proxy_chat_completion(messages, temperature, max_tokens, model=model, **kwargs)
+            except Exception as e:
+                proxy_error = e
+                if self._aicore_available:
+                    logger.warning("AI proxy failed (%s), falling back to AI Core", e)
+                else:
+                    raise  # No fallback available
+
+        if not self._aicore_available:
+            raise Exception("No LLM backend available")
 
         token = self._get_access_token()
 
@@ -112,8 +183,9 @@ class AICoreiClient:
         }
 
         # Build chat completion request
+        use_model = model or self.model_name
         payload = {
-            "model": self.model_name,
+            "model": use_model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -136,8 +208,8 @@ class AICoreiClient:
 
         try:
             logger.info(f"Sending chat completion to {endpoint}")
-            logger.info(f"Headers: {headers}")
-            logger.info(f"Payload: {payload}")
+            logger.debug(f"Headers: {{k: (v[:20] + '...') if k == 'Authorization' else v for k, v in headers.items()}}")
+            logger.debug(f"Payload model={payload.get('model')}, messages={len(payload.get('messages', []))}")
             response = requests.post(
                 endpoint,
                 json=payload,
@@ -172,7 +244,8 @@ class AICoreiClient:
         prompt: str,
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 2048
+        max_tokens: int = 2048,
+        model: Optional[str] = None,
     ) -> str:
         """
         Simple text generation (convenience method).
@@ -182,6 +255,7 @@ class AICoreiClient:
             system_prompt: Optional system instruction
             temperature: Sampling temperature
             max_tokens: Maximum tokens to generate
+            model: Optional model override (e.g. 'anthropic--claude-4.6-sonnet')
 
         Returns:
             Generated text string
@@ -196,7 +270,8 @@ class AICoreiClient:
         result = self.chat_completion(
             messages=messages,
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            model=model,
         )
 
         return result.get("content", "")

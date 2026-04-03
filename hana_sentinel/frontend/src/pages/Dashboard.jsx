@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react'
 import { Activity, AlertTriangle, CheckCircle, TrendingUp, Shield, Database, Clock, Server, Cpu, HardDrive } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
-import { metricsAPI, incidentsAPI } from '../services/api'
+import { metricsAPI } from '../services/api'
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState(null)
-  const [incidents, setIncidents] = useState([])
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -17,14 +16,12 @@ export default function Dashboard() {
 
   const fetchData = async () => {
     try {
-      const [metricsRes, incidentsRes, historyRes] = await Promise.all([
+      const [metricsRes, historyRes] = await Promise.all([
         metricsAPI.getRealtime().catch(() => ({ data: {} })),
-        incidentsAPI.list().catch(() => ({ data: { incidents: [] } })),
         metricsAPI.getHistory(12).catch(() => ({ data: { metrics: [] } }))
       ])
 
       setMetrics(metricsRes.data || {})
-      setIncidents(incidentsRes.data.incidents || [])
       setHistory(historyRes.data.metrics || [])
       setLoading(false)
     } catch (error) {
@@ -50,7 +47,6 @@ export default function Dashboard() {
   const activeConnections = metrics?.active_connections
   const transactionsPerSec = metrics?.transactions_per_sec
   const activeTransactions = metrics?.active_transactions
-  const riskBudget = metrics?.risk_budget || {}
   const isDbConnected = metrics?.database_connected
 
   const getHealthStatus = () => {
@@ -74,7 +70,6 @@ export default function Dashboard() {
     ...(memoryUsage != null ? [{ title: `Memory Usage: ${memoryUsage.toFixed(1)}%`, severity: memoryUsage > 85 ? 'warning' : 'success', timestamp: 'Just now' }] : []),
     ...(activeConnections != null ? [{ title: `Active Connections: ${activeConnections}`, severity: 'success', timestamp: '1 min ago' }] : []),
     ...(!isDbConnected ? [{ title: 'Database disconnected', severity: 'critical', timestamp: 'Just now' }] : []),
-    ...incidents.slice(0, 2)
   ]
 
   return (
@@ -91,7 +86,7 @@ export default function Dashboard() {
           <div className="flex items-center justify-between">
             <div>
               <h1 className="font-serif text-3xl font-semibold text-foreground tracking-tight">
-                HANA Sentinel
+                HANA Ops agent
               </h1>
               <div className="text-muted-foreground mt-2 flex items-center gap-3">
                 <span>AI-Powered Operations Platform</span>
@@ -136,10 +131,11 @@ export default function Dashboard() {
             subtitle={diskUsage != null ? `${(diskUsage * 8.5).toFixed(0)}GB used` : 'No data'}
           />
           <MetricCard
-            icon={Shield}
-            title="Risk Budget"
-            value={riskBudget.current_points || 100}
-            subtitle={`${riskBudget.consumed_today || 0} pts consumed`}
+            icon={Activity}
+            title="Transactions/sec"
+            value={transactionsPerSec != null ? transactionsPerSec : '—'}
+            unit={transactionsPerSec != null ? 'TPS' : ''}
+            subtitle={activeTransactions != null ? `${activeTransactions} active` : 'No data'}
           />
         </div>
 
@@ -229,12 +225,7 @@ export default function Dashboard() {
             title="Pending Approvals"
             subtitle="Review healing actions"
           />
-          <QuickActionCard
-            href="/risk-budget"
-            icon={CheckCircle}
-            title="Risk Budget"
-            subtitle={`${riskBudget.current_points || 100} points remaining`}
-          />
+          
         </div>
       </div>
     </div>

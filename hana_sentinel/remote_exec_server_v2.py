@@ -341,42 +341,46 @@ def check_system_parameters() -> Dict[str, Any]:
     return {"status": "success", "parameters": params}
 
 def check_backups() -> Dict[str, Any]:
-    """Check backup status"""
-    backup_base = f"/hdb/{Config.HANA_SID}/backup"
+    """Check latest complete data backup from M_BACKUP_CATALOG."""
+    sql = (
+        "SELECT TOP 1 ENTRY_TYPE_NAME, SYS_START_TIME, SYS_END_TIME, STATE_NAME "
+        "FROM M_BACKUP_CATALOG "
+        "WHERE ENTRY_TYPE_NAME='complete data backup' "
+        "ORDER BY SYS_END_TIME DESC"
+    )
 
-    info = {}
+    result = run_hdbsql(sql, timeout=20)
+    if result.get("status") != "success":
+        return {
+            "status": "error",
+            "error": result.get("error", "Failed to query backup catalog"),
+            "backups": {}
+        }
 
-    # Check data backup directory
-    data_dir = f"{backup_base}/data"
-    if os.path.exists(data_dir):
-        try:
-            files = os.listdir(data_dir)
-            info["data_backup"] = {
+    rows = result.get("rows", [])
+    if not rows:
+        return {
+            "status": "warning",
+            "message": "No complete data backup entries found in M_BACKUP_CATALOG",
+            "backups": {}
+        }
+
+    latest = rows[0]
+    state = str(latest.get("STATE_NAME", "")).strip()
+
+    return {
+        "status": "success",
+        "backups": {
+            "latest_data_backup": {
+                "entry_type": latest.get("ENTRY_TYPE_NAME", "complete data backup"),
+                "start_time": str(latest.get("SYS_START_TIME", "")),
+                "end_time": str(latest.get("SYS_END_TIME", "")),
+                "state": state,
                 "exists": True,
-                "file_count": len(files),
-                "path": data_dir
             }
-        except Exception as e:
-            info["data_backup"] = {"exists": True, "error": str(e)}
-    else:
-        info["data_backup"] = {"exists": False, "path": data_dir}
-
-    # Check log backup directory
-    log_dir = f"{backup_base}/log"
-    if os.path.exists(log_dir):
-        try:
-            files = os.listdir(log_dir)
-            info["log_backup"] = {
-                "exists": True,
-                "file_count": len(files),
-                "path": log_dir
-            }
-        except Exception as e:
-            info["log_backup"] = {"exists": True, "error": str(e)}
-    else:
-        info["log_backup"] = {"exists": False, "path": log_dir}
-
-    return {"status": "success", "backups": info}
+        },
+        "message": f"Last data backup: {state or 'unknown'}"
+    }
 
 # ============================================================================
 # Healing Functions (Pure Python)
@@ -501,15 +505,15 @@ def run_hdbsql(sql: str, timeout: int = 30) -> Dict[str, Any]:
     # Escape shell-sensitive characters in SQL to prevent injection
     safe_sql = sql.replace('\\', '\\\\').replace('"', '\\"').replace('`', '\\`').replace('$', '\\$')
     hdbsql_cmd = (
-        f'hdbsql -U SYSTEM "{safe_sql}"'
+        f'hdbsql -U DEFAULT "{safe_sql}"'
     )
 
     result = run_shell_as_hana_user(hdbsql_cmd, timeout=timeout)
 
     if result.get("status") != "success" or not result.get("output"):
-        # Try with SYSTEMDB userstore key as fallback (connects to port 30213)
+        # Try with userstore key as fallback (connects to port 30213)
         hdbsql_cmd_fallback = (
-            f'hdbsql -U SYSTEMDB "{safe_sql}"'
+            f'hdbsql -U HANACLEANER "{safe_sql}"'
         )
         result = run_shell_as_hana_user(hdbsql_cmd_fallback, timeout=timeout)
 
@@ -1405,7 +1409,7 @@ async def get_backup_status(x_api_key: str = Header(None)):
     """
     verify_api_key(x_api_key)
 
-    backup_info = await _to_thread(check_backups, _timeout=30, _description="backup_status")
+    backup_info = await _to_thread(check_backups, _timeout=120, _description="backup_status")
 
     return {
         "timestamp": datetime.now().isoformat(),

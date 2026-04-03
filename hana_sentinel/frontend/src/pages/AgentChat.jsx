@@ -1,207 +1,38 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Bot, User, Loader, AlertCircle, ShieldAlert, Globe, ExternalLink, Search, Sparkles, ArrowRight, CheckCircle2, Lock, RefreshCw, MousePointer2, FileText, Link2 } from 'lucide-react'
+import { Send, Bot, User, Loader, AlertCircle, ShieldAlert, Globe, ExternalLink, Search, Sparkles, ArrowRight, CheckCircle2, Lock, RefreshCw, MousePointer2, FileText, Link2, Trash2 } from 'lucide-react'
 import { agentAPI } from '../services/api'
 import ReactMarkdown from 'react-markdown'
 import PlaywrightBrowser from '../components/PlaywrightBrowser'
 
-// Simple Browser Window UI (fallback when not using Playwright)
-function BrowserWindow({ isAutonomous, query }) {
-  const [step, setStep] = useState(0)
-  const [cursorPos, setCursorPos] = useState({ x: 50, y: 40 })
+const WELCOME_MESSAGE = {
+  id: '1',
+  role: 'assistant',
+  content: `Hi, I'm your **HANA Ops agent**. Here's what I can do:
 
-  const steps = isAutonomous
-    ? [
-        { url: 'about:blank', action: 'Launching Chromium...', icon: '🚀' },
-        { url: 'https://www.google.com', action: 'Opening Google...', icon: '🌐' },
-        { url: `https://www.google.com/search?q=${encodeURIComponent(query)}`, action: 'Searching...', icon: '🔍' },
-        { url: 'https://help.sap.com/docs', action: 'Reading SAP Help...', icon: '📖' },
-        { url: 'https://me.sap.com/notes', action: 'Checking SAP Notes...', icon: '📋' },
-        { url: 'https://community.sap.com', action: 'Browsing community...', icon: '👥' },
-        { url: 'https://help.sap.com/docs', action: 'Extracting content...', icon: '📄' },
-        { url: 'complete', action: 'Synthesizing answer...', icon: '🧠' },
-      ]
-    : [
-        { url: 'searxng://search', action: 'Querying SearXNG...', icon: '🔍' },
-        { url: 'duckduckgo://search', action: 'Trying DuckDuckGo...', icon: '🦆' },
-        { url: 'https://help.sap.com/docs', action: 'Fetching SAP docs...', icon: '📖' },
-        { url: 'parsing://content', action: 'Parsing content...', icon: '📄' },
-        { url: 'complete', action: 'Generating answer...', icon: '🧠' },
-      ]
+🖥️ **Run Commands** — \`run uptime\`, \`execute df -h\`, \`sapcontrol -nr 02 -function GetProcessList\`
+🩺 **Health & Status** — \`check health\`, \`show status\`
+🔍 **Diagnostics** — \`run diagnostics\`
+💾 **Backups** — \`check backup status\`
+⚡ **SQL Optimization** — Paste a query for analysis
+🌐 **Web Search** — Toggle Browser mode to search SAP docs
 
-  const currentStep = steps[Math.min(step, steps.length - 1)]
-  const progress = Math.min(((step + 1) / steps.length) * 100, 100)
+What would you like to check?`,
+  timestamp: new Date().toISOString(),
+}
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setStep(s => (s < steps.length - 1 ? s + 1 : s))
-    }, 1200)
-    return () => clearInterval(interval)
-  }, [steps.length])
-
-  // Animate cursor position for autonomous mode
-  useEffect(() => {
-    if (!isAutonomous) return
-    const interval = setInterval(() => {
-      setCursorPos({
-        x: 20 + Math.random() * 60,
-        y: 20 + Math.random() * 60,
-      })
-    }, 800)
-    return () => clearInterval(interval)
-  }, [isAutonomous])
-
-  return (
-    <div className={`w-full max-w-2xl rounded-xl overflow-hidden border shadow-2xl ${
-      isAutonomous ? 'border-purple-500/40 browser-glow-purple' : 'border-blue-500/40 browser-glow'
-    }`}>
-      {/* macOS-style Window Chrome */}
-      <div className="bg-gradient-to-b from-slate-800 to-slate-900 px-4 py-2.5 flex items-center gap-3 border-b border-slate-700">
-        {/* Traffic lights */}
-        <div className="flex gap-2">
-          <div className="w-3 h-3 rounded-full bg-red-500/90 shadow-inner" />
-          <div className="w-3 h-3 rounded-full bg-yellow-500/90 shadow-inner" />
-          <div className="w-3 h-3 rounded-full bg-green-500/90 shadow-inner" />
-        </div>
-
-        {/* URL bar */}
-        <div className="flex-1 mx-2">
-          <div className="bg-slate-950/80 rounded-lg px-3 py-1.5 flex items-center gap-2 border border-slate-700">
-            {currentStep.url.startsWith('https') ? (
-              <Lock className="w-3 h-3 text-green-400 flex-shrink-0" />
-            ) : (
-              <Globe className="w-3 h-3 text-slate-500 flex-shrink-0" />
-            )}
-            <span className="text-xs text-slate-300 font-mono truncate flex-1">
-              {currentStep.url}
-            </span>
-            <RefreshCw className={`w-3 h-3 text-slate-500 ${progress < 100 ? 'animate-spin' : ''}`} />
-          </div>
-        </div>
-
-        {/* Mode badge */}
-        <div className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${
-          isAutonomous
-            ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-            : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-        }`}>
-          {isAutonomous ? 'AI BROWSER' : 'WEB SEARCH'}
-        </div>
-      </div>
-
-      {/* Browser Viewport */}
-      <div className="relative bg-white" style={{ height: '280px' }}>
-        {/* Simulated page content */}
-        <div className="absolute inset-0 p-4 overflow-hidden">
-          {/* Fake search results / page skeleton */}
-          <div className="space-y-3 animate-pulse">
-            <div className="h-6 bg-slate-100 rounded w-3/4" />
-            <div className="h-4 bg-slate-50 rounded w-full" />
-            <div className="h-4 bg-slate-50 rounded w-5/6" />
-            <div className="h-4 bg-slate-50 rounded w-4/6" />
-            <div className="mt-4 h-5 bg-blue-50 rounded w-2/3" />
-            <div className="h-4 bg-slate-50 rounded w-full" />
-            <div className="h-4 bg-slate-50 rounded w-3/4" />
-            <div className="mt-4 h-5 bg-blue-50 rounded w-1/2" />
-            <div className="h-4 bg-slate-50 rounded w-5/6" />
-          </div>
-
-          {/* Highlight box showing where AI is "looking" */}
-          {isAutonomous && step < steps.length - 1 && (
-            <div
-              className="absolute border-2 border-purple-400 rounded bg-purple-100/30 transition-all duration-500"
-              style={{
-                left: `${10 + (step % 3) * 20}%`,
-                top: `${20 + (step % 4) * 15}%`,
-                width: '120px',
-                height: '40px',
-              }}
-            />
-          )}
-        </div>
-
-        {/* AI Cursor for autonomous mode */}
-        {isAutonomous && step < steps.length - 1 && (
-          <div
-            className="absolute transition-all duration-700 ease-out z-10"
-            style={{ left: `${cursorPos.x}%`, top: `${cursorPos.y}%` }}
-          >
-            <MousePointer2 className="w-5 h-5 text-purple-600 drop-shadow-lg" style={{ transform: 'rotate(-15deg)' }} />
-            <div className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-purple-500 rounded-full animate-ping" />
-          </div>
-        )}
-
-        {/* Center action indicator */}
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className={`px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 ${
-            isAutonomous ? 'bg-purple-600/90 text-white' : 'bg-blue-600/90 text-white'
-          }`}>
-            <span className="text-lg">{currentStep.icon}</span>
-            <span className="text-sm font-medium">{currentStep.action}</span>
-          </div>
-        </div>
-
-        {/* Progress bar */}
-        <div className="absolute bottom-0 left-0 right-0 h-1 bg-slate-200">
-          <div
-            className={`h-full transition-all duration-500 ${
-              isAutonomous ? 'bg-purple-500' : 'bg-blue-500'
-            }`}
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-      </div>
-
-      {/* Status bar */}
-      <div className="bg-slate-900 px-4 py-2.5 border-t border-slate-700">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className={`w-1.5 h-1.5 rounded-full ${
-              progress < 100 ? 'bg-green-400 animate-pulse' : 'bg-blue-400'
-            }`} />
-            <span className="text-xs text-slate-400">{currentStep.action}</span>
-          </div>
-          <span className="text-[10px] text-slate-500 font-mono">
-            {Math.round(progress)}% • Step {step + 1}/{steps.length}
-          </span>
-        </div>
-
-        {/* Sources found */}
-        {step > 2 && (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {['help.sap.com', 'me.sap.com', 'community.sap.com'].slice(0, step - 2).map((domain, idx) => (
-              <div
-                key={idx}
-                className="flex items-center gap-1 px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-slate-400"
-              >
-                <CheckCircle2 className="w-2.5 h-2.5 text-green-500" />
-                {domain}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  )
+function loadChatHistory() {
+  try {
+    const saved = localStorage.getItem('agent_chat_history')
+    if (saved) {
+      const parsed = JSON.parse(saved)
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+    }
+  } catch { /* ignore */ }
+  return [WELCOME_MESSAGE]
 }
 
 export default function AgentChat() {
-  const [messages, setMessages] = useState([
-    {
-      id: '1',
-      role: 'assistant',
-      content: `Welcome to HANA Sentinel. I can assist you with:
-
-• **Run commands** — "run uptime", "execute df -h", "run sapcontrol -nr 00 -function GetProcessList"
-• **System health** — "check health", "show status"
-• **Diagnostics** — "run diagnostics"
-• **Backups** — "check backup status"
-• **SQL optimization** — Share a query for analysis
-• **Web search** — Enable Browser mode to search SAP docs & Google
-
-How may I assist you today?`,
-      timestamp: new Date(),
-    }
-  ])
+  const [messages, setMessages] = useState(loadChatHistory)
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -227,6 +58,7 @@ How may I assist you today?`,
       return false
     }
   })
+  const [browserSession, setBrowserSession] = useState(null) // Tracks active browser session
   const messagesEndRef = useRef(null)
 
   const scrollToBottom = () => {
@@ -236,6 +68,18 @@ How may I assist you today?`,
   useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  // Persist chat history to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('agent_chat_history', JSON.stringify(messages))
+    } catch { /* ignore */ }
+  }, [messages])
+
+  const clearChat = () => {
+    setMessages([WELCOME_MESSAGE])
+    try { localStorage.removeItem('agent_chat_history') } catch { /* ignore */ }
+  }
 
   useEffect(() => {
     try {
@@ -263,12 +107,13 @@ How may I assist you today?`,
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!input.trim() || isLoading) return
+    const trimmedInput = input.trim()
+    if (!trimmedInput || isLoading) return
 
     const userMessage = {
       id: Date.now().toString(),
       role: 'user',
-      content: input,
+      content: trimmedInput,
       timestamp: new Date(),
     }
 
@@ -276,45 +121,69 @@ How may I assist you today?`,
     setInput('')
     setIsLoading(true)
     setError(null)
+    setBrowserSession(null)
 
     // Auto-detect knowledge queries that should use browser
-    const inputLower = input.toLowerCase()
+    // Only trigger browser for explicit SAP note lookups or when user says "browse"
+    const inputLower = trimmedInput.toLowerCase()
     const isSapNoteQuery = /\b(?:sap\s*)?note\s*\d{5,7}\b|\b\d{6,7}\b/.test(inputLower)
-    const isKnowledgeQuery = [
-      'what is', 'how to', 'explain', 'search', 'look up', 'find',
-      'sap note', 'documentation', 'browse'
-    ].some(p => inputLower.includes(p))
-    const shouldUseBrowser = autonomousBrowser || isSapNoteQuery || isKnowledgeQuery
-
-    // Temporarily enable autonomous browser for this request if it's a knowledge query
-    if (shouldUseBrowser && !autonomousBrowser) {
-      setAutonomousBrowser(true)
-    }
+    const isExplicitBrowse = ['browse', 'look up', 'search the web'].some(p => inputLower.includes(p))
+    const shouldUseBrowser = autonomousBrowser && (isSapNoteQuery || isExplicitBrowse)
 
     try {
-      const response = await agentAPI.chat(input, conversationId, {
+      const response = await agentAPI.chat(trimmedInput, conversationId, {
         admin_mode: adminMode,
         use_browser: useBrowser || shouldUseBrowser,
         autonomous_browser: shouldUseBrowser,
       })
 
-      const sources = response.data.sources || []
+      const browserActive = response.data.browser_active === true
 
-      const assistantMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: response.data.response,
-        sources,
-        timestamp: new Date(),
+      if (browserActive) {
+        // WebSocket will handle the response — show browser UI, don't add assistant message yet
+        setBrowserSession({ query: trimmedInput, active: true })
+      } else {
+        // Normal response — add it directly
+        const sources = response.data.sources || []
+        const assistantMessage = {
+          id: (Date.now() + 1).toString(),
+          role: 'assistant',
+          content: response.data.response,
+          sources,
+          timestamp: new Date(),
+        }
+        setMessages(prev => [...prev, assistantMessage])
+        setIsLoading(false)
       }
-
-      setMessages(prev => [...prev, assistantMessage])
     } catch (err) {
       setError('Failed to get response from agent. Please try again.')
       console.error('Chat error:', err)
-    } finally {
       setIsLoading(false)
     }
+  }
+
+  // Called when PlaywrightBrowser completes — add the synthesized response as a message
+  const handleBrowserComplete = (result) => {
+    const assistantMessage = {
+      id: (Date.now() + 1).toString(),
+      role: 'assistant',
+      content: result.response || 'Browsing complete.',
+      sources: result.sources || [],
+      browserSummary: {
+        actionCount: result.actionCount || 0,
+        sources: result.sources || [],
+      },
+      timestamp: new Date(),
+    }
+    setMessages(prev => [...prev, assistantMessage])
+    setBrowserSession(prev => prev ? { ...prev, active: false } : null)
+    setIsLoading(false)
+  }
+
+  const handleBrowserError = (errorMsg) => {
+    setError(`Browser error: ${errorMsg}`)
+    setBrowserSession(null)
+    setIsLoading(false)
   }
 
   return (
@@ -370,6 +239,15 @@ How may I assist you today?`,
             <ShieldAlert className="w-4 h-4" />
             {adminMode ? 'Admin Mode ON' : 'Admin Mode OFF'}
           </button>
+          <button
+            type="button"
+            onClick={clearChat}
+            className="flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-md border bg-muted text-muted-foreground border-border hover:bg-danger-50 hover:text-danger-600 hover:border-danger-500/40 transition-all"
+            title="Clear chat history"
+          >
+            <Trash2 className="w-4 h-4" />
+            Clear
+          </button>
           <span className="font-mono text-xs text-muted-foreground tracking-wide">
             Session: {conversationId.slice(-8)}
           </span>
@@ -393,25 +271,14 @@ How may I assist you today?`,
                 <Bot className="w-5 h-5 text-accent-foreground" />
               </div>
               <div className="flex-1">
-                {autonomousBrowser ? (
+                {browserSession?.active ? (
                   /* Full Playwright Browser with real screenshots and cursor tracking */
                   <PlaywrightBrowser
-                    query={messages[messages.length - 1]?.content || 'searching...'}
+                    query={browserSession.query}
                     conversationId={conversationId}
                     isAutonomous={true}
-                    onComplete={(result) => {
-                      // The API call will handle the response
-                      console.log('Playwright browser completed:', result.actionCount, 'actions')
-                    }}
-                    onError={(error) => {
-                      console.error('Playwright error:', error)
-                    }}
-                  />
-                ) : (useBrowser) ? (
-                  /* Simple Browser Window UI for web search mode */
-                  <BrowserWindow
-                    isAutonomous={false}
-                    query={messages[messages.length - 1]?.content || 'searching...'}
+                    onComplete={handleBrowserComplete}
+                    onError={handleBrowserError}
                   />
                 ) : (
                   /* Simple loading for non-browser mode */
@@ -529,7 +396,13 @@ function MessageBubble({ message }) {
                       </pre>
                     )
                   },
-                  p: ({ children }) => <p className="mb-3 last:mb-0 leading-relaxed">{children}</p>,
+                  p: ({ children }) => {
+                    const hasBlock = Array.isArray(children)
+                      ? children.some(c => c?.type === 'pre' || c?.type === 'div')
+                      : children?.type === 'pre' || children?.type === 'div'
+                    if (hasBlock) return <div className="mb-3 last:mb-0 leading-relaxed">{children}</div>
+                    return <p className="mb-3 last:mb-0 leading-relaxed">{children}</p>
+                  },
                   ul: ({ children }) => <ul className="list-disc list-inside mb-3 space-y-1.5">{children}</ul>,
                   li: ({ children }) => <li className="text-foreground">{children}</li>,
                   strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
@@ -540,6 +413,23 @@ function MessageBubble({ message }) {
             </div>
           )}
         </div>
+
+        {/* Browser Session Summary */}
+        {!isUser && message.browserSummary && (
+          <div className="mt-3 w-full">
+            <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-purple-50 border border-purple-100">
+              <Globe className="w-3.5 h-3.5 text-purple-500" />
+              <span className="text-xs font-medium text-purple-700">
+                Browsed {message.browserSummary.actionCount} actions
+              </span>
+              {message.browserSummary.sources?.length > 0 && (
+                <span className="text-xs text-purple-500">
+                  • {message.browserSummary.sources.length} source{message.browserSummary.sources.length > 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Browsed Sources */}
         {!isUser && message.sources && message.sources.length > 0 && (
@@ -585,7 +475,7 @@ function MessageBubble({ message }) {
         )}
 
         <div className="font-mono text-[10px] text-muted-foreground mt-2 px-1 tracking-wide">
-          {message.timestamp.toLocaleTimeString()}
+          {new Date(message.timestamp).toLocaleTimeString()}
         </div>
       </div>
     </div>

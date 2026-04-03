@@ -166,7 +166,6 @@ function getIconForActivityType(type) {
     config: '⚙️',
     backup: '💾',
     query: '🐌',
-    security: '🔒',
   }
   return icons[type] || 'ℹ️'
 }

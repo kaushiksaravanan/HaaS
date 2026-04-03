@@ -1,0 +1,128 @@
+================================================================================
+HANA INSTANCE DIAGNOSTIC REPORT
+================================================================================
+Diagnostic ID: diag_ZO3_20260311_152139
+Timestamp: 2026-03-11T15:21:39.443007
+Instance: vlgdbzo3
+SID: ZO3
+Instance Number: 02
+================================================================================
+
+Overall Status: WARNING
+Issues Detected: 3
+
+ISSUES:
+  - memory_usage: Warning detected
+  - backup_status: Warning detected
+  - system_parameters: Warning detected
+
+================================================================================
+DIAGNOSTIC CHECKS
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: PROCESS_STATUS
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: ok
+all_green: True
+message: 11.03.2026 10:51:39
+GetProcessList
+OK
+name, description, dispstatus, textstatus, starttime, elapsedtime, pid
+hdbdaemon, HDB Daemon, GREEN, Running, 2026 03 09 18:03:27, 40:48:12, 76265
+hdbcompileserver, HDB Compileserver, GREEN, Running, 2026 03 09 18:03:41, 40:47:58, 76459
+hdbdiserver, HDB Deployment Infrastructure Server-ZO3, GREEN, Running, 2026 03 09 18:05:05, 40:46:34, 77672
+hdbdocstore, HDB DocStore-ZO3, GREEN, Running, 2026 03 09 18:03:41, 40:47:58, 76497
+hdbdpserver, HDB DPserver-ZO3, GREEN, Running, 2026 03 09 18:03:41, 40:47:58, 76500
+hdbindexserver, HDB Indexserver-ZO3, GREEN, Running, 2026 03 09 18:03:41, 40:47:58, 76503
+hdbnameserver, HDB Nameserver, GREEN, Running, 2026 03 09 18:03:28, 40:48:11, 76290
+hdbpreprocessor, HDB Preprocessor, GREEN, Running, 2026 03 09 18:03:41, 40:47:58, 76462
+hdbscriptserver, HDB Scriptserver-ZO3, GREEN, Running, 2026 03 09 18:03:41, 40:47:58, 76506
+hdbwebdispatcher, HDB Web Dispatcher, GREEN, Running, 2026 03 09 18:05:05, 40:46:34, 77675
+hdbxsengine, HDB XSEngine-ZO3, GREEN, Running, 2026 03 09 18:03:41, 40:47:58, 76509
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: HDB_INFO
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: ok
+message: SID: ZO3, Instance: 02, User: zo3adm, Host: vlgdbzo3
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: DISK_USAGE
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: ok
+partitions: [{'mount': '/Backup_NewDB_ZO3', 'size': '177G', 'used': '12G', 'avail': '166G', 'use_pct': 7}, {'mount': '/hana', 'size': '100G', 'used': '20G', 'avail': '81G', 'use_pct': 20}, {'mount': '/usr/sap/ZO3', 'size': '10G', 'used': '43M', 'avail': '10G', 'use_pct': 1}, {'mount': '/hana/data/ZO3', 'size': '300G', 'used': '152G', 'avail': '149G', 'use_pct': 51}, {'mount': '/hana/log/ZO3', 'size': '177G', 'used': '62G', 'avail': '116G', 'use_pct': 35}]
+max_usage: 51
+critical_partition: /hana/data/ZO3
+message: Max disk usage: 51% on /hana/data/ZO3
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: DATABASE_VERSION
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: info
+version: error
+message: SID: ZO3, Instance: 02, OS: Linux 5.14.21-150400.24.194-default
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: USERSTORE
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: ok
+keys: ['FILE        : /usr/sap/ZO3/home/.hdb/lddbzo3/SSFS_HDB.KEY', 'ZO3SAPDBCTRL', 'SYSTEM', 'SYSMONDB', 'HANACLEANER', 'HEALER', 'BKPMON', 'SYSTEMDB', 'HEALERZO3', 'HANACLEANERZO3', 'TRANSPORT', 'DEFAULT']
+missing_keys: []
+key_count: 12
+message: 12 keys configured
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: DATABASE_ALERTS
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: ok
+alerts: []
+alert_count: 0
+message: No alerts
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: MEMORY_USAGE
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: warning
+memory_info: {'total': '179Gi', 'used': '165Gi', 'available': '14Gi'}
+usage_percent: 92.2
+message: Memory: 165Gi / 179Gi (92.2% used)
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: BACKUP_STATUS
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: warning
+backup_info: {'data_backup': {'exists': False, 'path': '/hdb/ZO3/backup/data'}, 'log_backup': {'exists': False, 'path': '/hdb/ZO3/backup/log'}}
+message: Data backup: not found, Log backup: not found
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: SYSTEM_PARAMETERS
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: warning
+parameters: {'swappiness': {'value': '10', 'expected': '10', 'status': 'ok'}, 'transparent_hugepages': {'value': 'always madvise [never]', 'expected': '[never]', 'status': 'ok'}, 'aslr': {'value': '2', 'expected': '0', 'status': 'warning'}}
+all_ok: False
+message: Warnings: aslr
+
+────────────────────────────────────────────────────────────────────────────────
+CHECK: TRACE_DIRECTORY
+────────────────────────────────────────────────────────────────────────────────
+Status: success
+Severity: info
+trace_directory: /usr/sap/ZO3/HDB02/lddbzo3/trace
+trace_size: 2.6G
+message: Trace directory size: 2.6G
+
+================================================================================
+Diagnostic completed: 2026-03-11T15:21:44.970605
+Log file: C:\Users\I587436\Downloads\HanaS\hana_sentinel\logs\instance\diagnostic_ZO3_20260311_152144.log
+================================================================================

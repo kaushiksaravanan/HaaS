@@ -11,7 +11,7 @@ from datetime import datetime
 
 from .tools.hana_tools import query_hana, execute_hana_sql, execute_remote_command
 from .tools.rag_tools import rag_query
-from .models import ActionCertificate, RiskBudget, PolicyEngine, RISK_SCORES
+from .models import ActionCertificate, PolicyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -94,12 +94,12 @@ class IndexserverCrashScenario(ChaosScenario):
         )
 
     def simulate(self) -> dict:
-        """Simulate by checking what would happen (safe mock)."""
-        # In real chaos: execute_remote_command("kill -9 $(pgrep hdbindexserver)", admin_override=True)
+        """Simulate by checking what would happen (not executed — chaos tests are dry-run only)."""
         return {
-            "action": "Simulated indexserver crash",
-            "method": "kill -9 on hdbindexserver PID",
+            "action": "Dry-run: indexserver crash scenario",
+            "method": "Would kill hdbindexserver PID (not executed)",
             "expected_response": "Recovery Agent: detect → Action Cert → restart",
+            "executed": False,
         }
 
     def verify(self) -> bool:
@@ -108,7 +108,7 @@ class IndexserverCrashScenario(ChaosScenario):
         )
         if result["status"] == "success" and result["rows"]:
             return result["rows"][0].get("ACTIVE_STATUS") == "YES"
-        return True  # Mock always passes
+        return False  # Cannot verify — query failed
 
 
 # ──────────────────────────────────────────────
@@ -124,11 +124,11 @@ class LogDiskFullScenario(ChaosScenario):
         )
 
     def simulate(self) -> dict:
-        # In real chaos: execute_remote_command("dd if=/dev/zero of=/hana/log/fill bs=1M count=5000", admin_override=True)
         return {
-            "action": "Simulated log disk fill",
-            "method": "dd if=/dev/zero of=/hana/log/fill",
+            "action": "Dry-run: log disk full scenario",
+            "method": "Would fill log disk (not executed)",
             "expected_response": "Capacity Agent: detect → clean traces → alert",
+            "executed": False,
         }
 
     def verify(self) -> bool:
@@ -139,7 +139,7 @@ class LogDiskFullScenario(ChaosScenario):
             row = result["rows"][0]
             if row["TOTAL_SIZE"] > 0:
                 return (row["USED_SIZE"] / row["TOTAL_SIZE"]) < 0.9
-        return True
+        return False  # Cannot verify — query failed
 
 
 # ──────────────────────────────────────────────
@@ -156,9 +156,10 @@ class BackupFailureScenario(ChaosScenario):
 
     def simulate(self) -> dict:
         return {
-            "action": "Simulated backup target block",
-            "method": "iptables block on backup destination",
+            "action": "Dry-run: backup failure scenario",
+            "method": "Would block backup target (not executed)",
             "expected_response": "Backup Agent: detect failure → retry alternate → alert",
+            "executed": False,
         }
 
     def verify(self) -> bool:
@@ -167,7 +168,7 @@ class BackupFailureScenario(ChaosScenario):
         )
         if result["status"] == "success" and result["rows"]:
             return result["rows"][0].get("STATE_NAME") == "successful"
-        return True
+        return False  # Cannot verify — query failed
 
 
 # ──────────────────────────────────────────────
@@ -184,16 +185,17 @@ class MemoryPressureScenario(ChaosScenario):
 
     def simulate(self) -> dict:
         return {
-            "action": "Simulated memory pressure",
-            "method": "Load large dataset into memory",
+            "action": "Dry-run: memory pressure scenario",
+            "method": "Would load large dataset (not executed)",
             "expected_response": "Health Agent + SQL Tuning: identify offender → unload",
+            "executed": False,
         }
 
     def verify(self) -> bool:
         result = query_hana("SELECT MEMORY_USED_PCT FROM M_HOST_RESOURCE_UTILIZATION")
         if result["status"] == "success" and result["rows"]:
-            return result["rows"][0].get("MEMORY_USED_PCT", 0) < 85
-        return True
+            return result["rows"][0].get("MEMORY_USED_PCT", 100) < 85
+        return False  # Cannot verify — query failed
 
 
 # ──────────────────────────────────────────────
@@ -210,9 +212,10 @@ class MissingGlobalIniScenario(ChaosScenario):
 
     def simulate(self) -> dict:
         return {
-            "action": "Simulated missing global.ini entry",
-            "method": "Remove basepath_logbackup from [persistence]",
+            "action": "Dry-run: missing global.ini entry scenario",
+            "method": "Would remove basepath_logbackup (not executed)",
             "expected_response": "Capacity Agent: detect → generate cert → restore",
+            "executed": False,
         }
 
     def verify(self) -> bool:
@@ -235,9 +238,10 @@ class SecurityDriftScenario(ChaosScenario):
 
     def simulate(self) -> dict:
         return {
-            "action": "Simulated security drift",
-            "method": "GRANT SAP_ALL to test user",
+            "action": "Dry-run: security drift scenario",
+            "method": "Would grant SAP_ALL to test user (not executed)",
             "expected_response": "Security Agent: detect → revoke → audit report",
+            "executed": False,
         }
 
     def verify(self) -> bool:
@@ -246,7 +250,7 @@ class SecurityDriftScenario(ChaosScenario):
         )
         if result["status"] == "success" and result["rows"]:
             return result["rows"][0].get("cnt", 0) == 0
-        return True
+        return False  # Cannot verify — query failed
 
 
 # ──────────────────────────────────────────────
@@ -263,9 +267,10 @@ class PatchDayAlertScenario(ChaosScenario):
 
     def simulate(self) -> dict:
         return {
-            "action": "Simulated Patch Day CVE alert",
-            "method": "Inject CVE-2026-0492 assessment request",
+            "action": "Dry-run: Patch Day CVE alert scenario",
+            "method": "Would inject CVE assessment request (not executed)",
             "expected_response": "Browser-Use + Security: extract → assess → report",
+            "executed": False,
         }
 
     def verify(self) -> bool:

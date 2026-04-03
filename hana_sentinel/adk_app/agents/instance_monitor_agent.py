@@ -88,19 +88,64 @@ def identify_required_healing(diagnostic_id: str = None) -> str:
         Recommended healing actions
     """
     try:
-        # For now, this is a placeholder that analyzes the last diagnostic
-        # In full implementation, this would look up the diagnostic by ID
+        from adk_app.tools.instance_diagnostics import run_instance_diagnostic
 
+        # Get the latest diagnostic data to analyze
+        result = run_instance_diagnostic()
+        issues = result.get('issues_detected', [])
+        checks = result.get('checks', {})
         recommendations = []
 
-        # Logic to map issues to healing scripts
-        # This would be expanded based on actual diagnostic data
+        # Map real diagnostic issues to healing scripts
+        for check_name, check_data in checks.items():
+            severity = check_data.get('severity', 'ok')
+            message = check_data.get('message', '')
 
-        output = "Healing Recommendations:\n"
+            if severity in ('critical', 'error'):
+                if 'disk' in check_name.lower() or 'disk' in message.lower():
+                    recommendations.append({
+                        'script': 'check_disk.sh',
+                        'risk': 'medium',
+                        'reason': f"{check_name}: {message}",
+                    })
+                elif 'memory' in check_name.lower() or 'memory' in message.lower():
+                    recommendations.append({
+                        'script': 'check_memory.sh',
+                        'risk': 'medium',
+                        'reason': f"{check_name}: {message}",
+                    })
+                elif 'backup' in check_name.lower() or 'backup' in message.lower():
+                    recommendations.append({
+                        'script': 'check_backups.sh',
+                        'risk': 'medium',
+                        'reason': f"{check_name}: {message}",
+                    })
+                elif 'userstore' in check_name.lower():
+                    recommendations.append({
+                        'script': 'fix_userstore.sh',
+                        'risk': 'high',
+                        'reason': f"{check_name}: {message}",
+                    })
+                elif 'process' in check_name.lower() or 'service' in check_name.lower():
+                    recommendations.append({
+                        'script': 'check_hana_processes.sh',
+                        'risk': 'high',
+                        'reason': f"{check_name}: {message}",
+                    })
+                else:
+                    recommendations.append({
+                        'script': 'N/A',
+                        'risk': 'unknown',
+                        'reason': f"{check_name}: {message} (no matching healing script)",
+                    })
+
+        output = f"Healing Recommendations (based on diagnostic {result.get('diagnostic_id', 'latest')}):\n"
         output += "======================\n\n"
+        output += f"Overall status: {result.get('overall_status', 'unknown').upper()}\n"
+        output += f"Issues detected: {result.get('issue_count', 0)}\n\n"
 
         if not recommendations:
-            output += "No healing actions required at this time.\n"
+            output += "No healing actions required — all checks passed or no critical/error issues found.\n"
         else:
             for idx, rec in enumerate(recommendations, 1):
                 output += f"{idx}. {rec['script']}\n"

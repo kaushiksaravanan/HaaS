@@ -170,11 +170,11 @@ _THINKING_FILLERS = [
 
 # Greeting variety
 _GREETINGS = [
-    "Hey there! I'm HANA Sentinel. What can I help you with?",
-    "Hello! HANA Sentinel here. How can I help?",
-    "Hi! I'm HANA Sentinel, your SAP HANA assistant. What do you need?",
-    "Hey! HANA Sentinel ready. What's up?",
-    "Hello! I'm HANA Sentinel. Ask me anything about your HANA system.",
+    "Hey there! I'm HANA Ops Agent. What can I help you with?",
+    "Hello! HANA Ops Agent here. How can I help?",
+    "Hi! I'm HANA Ops Agent, your SAP HANA assistant. What do you need?",
+    "Hey! HANA Ops Agent ready. What's up?",
+    "Hello! I'm HANA Ops Agent. Ask me anything about your HANA system.",
 ]
 
 
@@ -279,8 +279,8 @@ class SentinelLLMStream(LLMStream):
 
         # Call Sentinel API in a thread (synchronous HTTP)
         t0 = time.time()
-        result = await asyncio.get_event_loop().run_in_executor(
-            None, _call_sentinel_chat, self._user_msg, self._conversation_id
+        result = await asyncio.to_thread(
+            _call_sentinel_chat, self._user_msg, self._conversation_id
         )
         elapsed = time.time() - t0
 
@@ -356,7 +356,7 @@ async def entrypoint(ctx: JobContext) -> None:
     # Phone callers get slightly different instructions
     if is_sip:
         instructions = (
-            "You are HANA Sentinel, a voice-first AI ops assistant for SAP HANA. "
+            "You are HANA Ops Agent, a voice-first AI ops assistant for SAP HANA. "
             "The user is calling from a phone. "
             "RULES FOR PHONE: "
             "1) Keep answers to 1-2 sentences — phone audio quality is lower. "
@@ -364,11 +364,30 @@ async def entrypoint(ctx: JobContext) -> None:
             "3) Never mention URLs, links, or visual elements. "
             "4) If a command fails, briefly say what went wrong. "
             "5) For long outputs, give only the single most important finding. "
-            "6) Be direct and efficient — phone callers are often on the go."
+            "6) Be direct and efficient — phone callers are often on the go. "
+            "\n\n"
+            "COMMON COMMANDS YOU CAN RUN — use these proactively:\n"
+            "OS: uptime, df -h, free -h, top -bn1 | head -20, ps aux --sort=-%mem | head -20, "
+            "cat /etc/hosts, cat /var/log/messages | tail -50, cat /etc/os-release, "
+            "ls -ltr /hana/data, ls -ltr /hana/log, ls -ltr /hana/backup, "
+            "du -sh /hana/data/* /hana/log/* /hana/shared/*, "
+            "cat /proc/sys/vm/swappiness, cat /sys/kernel/mm/transparent_hugepage/enabled, "
+            "ss -tlnp, mount | grep hana\n"
+            "HANA: sapcontrol -nr 02 -function GetProcessList, "
+            "sapcontrol -nr 02 -function GetSystemInstanceList, HDB info, HDB version, "
+            "hdbuserstore list, "
+            "hdbsql -U DEFAULT \"SELECT SERVICE_NAME, ACTIVE_STATUS FROM M_SERVICES\", "
+            "hdbsql -U DEFAULT \"SELECT HOST, ROUND(CPU_USER_PCT,1) AS CPU, ROUND(MEMORY_USED_PCT,1) AS MEM FROM M_HOST_RESOURCE_UTILIZATION\", "
+            "hdbsql -U DEFAULT \"SELECT TOP 5 BACKUP_ID, STATE_NAME, SYS_START_TIME, SYS_END_TIME FROM M_BACKUP_CATALOG ORDER BY SYS_END_TIME DESC\", "
+            "hdbsql -U DEFAULT \"SELECT USAGE_TYPE, ROUND(USED_SIZE/1024/1024/1024,1) AS USED_GB, ROUND(TOTAL_SIZE/1024/1024/1024,1) AS TOTAL_GB FROM M_DISK_USAGE\", "
+            "hdbsql -U DEFAULT \"SELECT ALERT_ID, ALERT_RATING, ALERT_DETAILS FROM STATISTICS_CURRENT_ALERTS WHERE ALERT_RATING >= 3\", "
+            "hdbsql -U DEFAULT \"SELECT * FROM M_SYSTEM_OVERVIEW\"\n"
+            "When the user asks about disk, memory, processes, backups, services, etc., "
+            "run the matching command and report the real numbers."
         )
     else:
         instructions = (
-            "You are HANA Sentinel, a voice-first AI ops assistant for SAP HANA. "
+            "You are HANA Ops Agent, a voice-first AI ops assistant for SAP HANA. "
             "You are connected to a LIVE server and can run real commands. "
             "RULES FOR VOICE: "
             "1) Keep every answer under 2-3 sentences unless the user asks for detail. "
@@ -379,7 +398,26 @@ async def entrypoint(ctx: JobContext) -> None:
             "5) If something failed, say what went wrong in plain language. "
             "6) When asked to run something, just do it and report back — no need to confirm first for read-only commands. "
             "7) NEVER give textbook definitions. If the user asks about uptime, disk, memory, etc., "
-            "   check the actual LIVE system and report real numbers."
+            "   check the actual LIVE system and report real numbers. "
+            "\n\n"
+            "COMMON COMMANDS YOU CAN RUN — use these proactively:\n"
+            "OS: uptime, df -h, free -h, top -bn1 | head -20, ps aux --sort=-%mem | head -20, "
+            "cat /etc/hosts, cat /var/log/messages | tail -50, cat /etc/os-release, "
+            "ls -ltr /hana/data, ls -ltr /hana/log, ls -ltr /hana/backup, "
+            "du -sh /hana/data/* /hana/log/* /hana/shared/*, "
+            "cat /proc/sys/vm/swappiness, cat /sys/kernel/mm/transparent_hugepage/enabled, "
+            "ss -tlnp, mount | grep hana\n"
+            "HANA: sapcontrol -nr 02 -function GetProcessList, "
+            "sapcontrol -nr 02 -function GetSystemInstanceList, HDB info, HDB version, "
+            "hdbuserstore list, "
+            "hdbsql -U DEFAULT \"SELECT SERVICE_NAME, ACTIVE_STATUS FROM M_SERVICES\", "
+            "hdbsql -U DEFAULT \"SELECT HOST, ROUND(CPU_USER_PCT,1) AS CPU, ROUND(MEMORY_USED_PCT,1) AS MEM FROM M_HOST_RESOURCE_UTILIZATION\", "
+            "hdbsql -U DEFAULT \"SELECT TOP 5 BACKUP_ID, STATE_NAME, SYS_START_TIME, SYS_END_TIME FROM M_BACKUP_CATALOG ORDER BY SYS_END_TIME DESC\", "
+            "hdbsql -U DEFAULT \"SELECT USAGE_TYPE, ROUND(USED_SIZE/1024/1024/1024,1) AS USED_GB, ROUND(TOTAL_SIZE/1024/1024/1024,1) AS TOTAL_GB FROM M_DISK_USAGE\", "
+            "hdbsql -U DEFAULT \"SELECT ALERT_ID, ALERT_RATING, ALERT_DETAILS FROM STATISTICS_CURRENT_ALERTS WHERE ALERT_RATING >= 3\", "
+            "hdbsql -U DEFAULT \"SELECT * FROM M_SYSTEM_OVERVIEW\"\n"
+            "When the user asks about disk, memory, processes, backups, services, etc., "
+            "run the matching command and report the real numbers."
         )
 
     agent = Agent(
@@ -414,5 +452,6 @@ if __name__ == "__main__":
         WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
+            agent_name="hana-sentinel-voice",
         )
     )

@@ -32,6 +32,14 @@ export const getLatestDiagnostic = async () => {
 };
 
 /**
+ * Get diagnostic history (summaries of all past runs)
+ */
+export const getDiagnosticHistory = async () => {
+  const response = await axios.get(`${API_BASE_URL}/instance/diagnostics/history`);
+  return response.data;
+};
+
+/**
  * Create VM snapshot
  */
 export const createInstanceSnapshot = async () => {
@@ -44,6 +52,14 @@ export const createInstanceSnapshot = async () => {
  */
 export const listInstanceSnapshots = async () => {
   const response = await axios.get(`${API_BASE_URL}/instance/snapshots`);
+  return response.data;
+};
+
+/**
+ * Get pending healing approvals
+ */
+export const getPendingApprovals = async () => {
+  const response = await axios.get(`${API_BASE_URL}/instance/healing/pending`);
   return response.data;
 };
 

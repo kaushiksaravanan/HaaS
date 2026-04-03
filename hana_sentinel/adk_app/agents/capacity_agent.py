@@ -19,10 +19,11 @@ class CapacityAgent:
         disk_usage = self.hana_client.execute_query(disk_query)
         memory_usage = self.hana_client.execute_query(memory_query)
 
+        disk_total = disk_usage[0]["TOTAL_USED"] if disk_usage else None
+        mem_total = memory_usage[0]["TOTAL_MEMORY_USED_SIZE"] if memory_usage else None
+
         return {
-            "disk_total_used": disk_usage[0]["TOTAL_USED"] if disk_usage else 0,
-            "memory_total_used": memory_usage[0]["TOTAL_MEMORY_USED_SIZE"]
-            if memory_usage
-            else 0,
-            "forecast": "Stable",  # Placeholder for predictive logic
+            "disk_total_used": disk_total if disk_total is not None else "unavailable",
+            "memory_total_used": mem_total if mem_total is not None else "unavailable",
+            "forecast": "unavailable — no trend data collected yet",
         }

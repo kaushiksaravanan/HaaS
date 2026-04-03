@@ -19,12 +19,9 @@ import threading
 logger = logging.getLogger(__name__)
 
 from .models import (
-    HANAOperationState,
-    RiskBudget,
     ActionCertificate,
-    XFixReport,
     PolicyEngine,
-    RISK_SCORES,
+    RiskBudget,
 )
 from .tools.hana_tools import query_hana, check_hana_connection, _get_connection, execute_remote_command
 from .tools.rag_tools import rag_query
@@ -47,14 +44,77 @@ if os.path.exists(frontend_build_path):
 # ──────────────────────────────────────────────
 # In-memory stores (production: PostgreSQL + pgvector)
 # ──────────────────────────────────────────────
-_incidents: Dict[str, HANAOperationState] = {}
 _certificates: Dict[str, ActionCertificate] = {}
-_xfix_reports: Dict[str, XFixReport] = {}
 _risk_budgets: Dict[str, RiskBudget] = {}
-_replays: Dict[str, dict] = {}
 _instance_diagnostics: Dict[str, dict] = {}
 _instance_healing_proposals: Dict[str, dict] = {}
 _instance_snapshots: Dict[str, dict] = {}
+_restricted_command_approvals: Dict[str, dict] = {}
+
+# ──────────────────────────────────────────────
+# Persistent diagnostic history (JSON file)
+# ──────────────────────────────────────────────
+_DIAG_HISTORY_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs", "instance", "diagnostic_history.json")
+
+
+def _load_diagnostic_history():
+    """Load diagnostic history from disk into memory on startup."""
+    global _instance_diagnostics
+    try:
+        if os.path.exists(_DIAG_HISTORY_FILE):
+            with open(_DIAG_HISTORY_FILE, "r") as f:
+                _instance_diagnostics = json.load(f)
+            logger.info(f"Loaded {len(_instance_diagnostics)} diagnostics from history")
+    except Exception as exc:
+        logger.warning(f"Failed to load diagnostic history: {exc}")
+
+
+def _save_diagnostic_history():
+    """Persist current diagnostics to disk."""
+    try:
+        os.makedirs(os.path.dirname(_DIAG_HISTORY_FILE), exist_ok=True)
+        with open(_DIAG_HISTORY_FILE, "w") as f:
+            json.dump(_instance_diagnostics, f, default=str)
+    except Exception as exc:
+        logger.warning(f"Failed to save diagnostic history: {exc}")
+
+
+def _get_diagnostic_context(max_entries: int = 5) -> str:
+    """Build a concise diagnostic history summary for LLM context."""
+    if not _instance_diagnostics:
+        return ""
+    # Sort by timestamp descending, take the most recent entries
+    sorted_diags = sorted(
+        _instance_diagnostics.values(),
+        key=lambda x: x.get("timestamp", ""),
+        reverse=True,
+    )[:max_entries]
+
+    lines = ["=== Recent Diagnostic History (vlgdbzo3) ==="]
+    for d in sorted_diags:
+        ts = d.get("timestamp", "unknown")
+        status = d.get("overall_status", "unknown")
+        issues = d.get("issues_detected", [])
+        issue_count = d.get("issue_count", 0)
+        diag_id = d.get("diagnostic_id", "unknown")
+        lines.append(f"\n[{ts}] Status: {status.upper()} | Issues: {issue_count} | ID: {diag_id}")
+        if issues:
+            for issue in issues[:5]:
+                lines.append(f"  - {issue}")
+        # Include key check summaries
+        checks = d.get("checks", {})
+        for check_name, check_data in checks.items():
+            if isinstance(check_data, dict):
+                severity = check_data.get("severity", "")
+                msg = check_data.get("message", "")
+                if severity in ("warning", "critical") or check_name in ("memory_usage", "disk_usage", "backup_status"):
+                    short_msg = (msg[:120] + "...") if len(str(msg)) > 120 else msg
+                    lines.append(f"  {check_name}: [{severity}] {short_msg}")
+    return "\n".join(lines)
+
+
+# Load history on import
+_load_diagnostic_history()
 
 
 # ──────────────────────────────────────────────
@@ -90,34 +150,8 @@ manager = ConnectionManager()
 # ──────────────────────────────────────────────
 # Request/Response Models
 # ──────────────────────────────────────────────
-class IncidentCreate(BaseModel):
-    system_id: str = os.getenv("GCP_TOOLKIT_HANA_SID", os.getenv("HANA_SID", ""))
-    severity: int = 3
-    description: str = ""
-    detected_by: str = ""
-    evidence: dict = {}
-
-
-class RemediationPropose(BaseModel):
-    action_type: str
-    description: str
-    target_component: str
-    agent: str
-    evidence: List[str] = []
-
-
-class ApprovalRequest(BaseModel):
-    approved_by: str
-    notes: str = ""
-
-
 class RAGQueryRequest(BaseModel):
     question: str
-
-
-class ReplayCreate(BaseModel):
-    incident_id: str
-    modified_policies: dict = {}
 
 
 class AgentChatRequest(BaseModel):
@@ -127,207 +161,6 @@ class AgentChatRequest(BaseModel):
     use_browser: bool = False  # When True, always browse SAP docs for answers
     autonomous_browser: bool = False  # When True, use browser-use agent (like Manus)
     voice_mode: bool = False  # When True, return voice-friendly summaries instead of markdown
-
-
-# ──────────────────────────────────────────────
-# Incident Endpoints
-# ──────────────────────────────────────────────
-@app.post("/api/v1/incidents")
-def create_incident(req: IncidentCreate):
-    """Create incident from agent detection."""
-    state = HANAOperationState(system_id=req.system_id)
-    state.audit_trail.append(
-        {
-            "timestamp": datetime.utcnow().isoformat(),
-            "event": "incident_created",
-            "severity": req.severity,
-            "description": req.description,
-            "detected_by": req.detected_by,
-        }
-    )
-    _incidents[state.incident_id] = state
-    return {"incident_id": state.incident_id, "status": "created"}
-
-
-@app.get("/api/v1/incidents")
-def list_incidents():
-    """List all incidents."""
-    return {
-        "incidents": [
-            {
-                "incident_id": incident_id,
-                **state.model_dump()
-            }
-            for incident_id, state in _incidents.items()
-        ]
-    }
-
-
-@app.get("/api/v1/incidents/{incident_id}")
-def get_incident(incident_id: str):
-    """Retrieve incident details."""
-    if incident_id not in _incidents:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    return _incidents[incident_id].model_dump()
-
-
-@app.get("/api/v1/incidents/{incident_id}/timeline")
-def get_incident_timeline(incident_id: str):
-    """Full event timeline for an incident."""
-    if incident_id not in _incidents:
-        raise HTTPException(status_code=404, detail="Incident not found")
-    return {"incident_id": incident_id, "timeline": _incidents[incident_id].audit_trail}
-
-
-# ──────────────────────────────────────────────
-# Remediation Endpoints
-# ──────────────────────────────────────────────
-@app.post("/api/v1/incidents/{incident_id}/remediation")
-def propose_remediation(incident_id: str, req: RemediationPropose):
-    """Propose X-Fix remediation for an incident."""
-    if incident_id not in _incidents:
-        raise HTTPException(status_code=404, detail="Incident not found")
-
-    # Create Action Certificate
-    cert = ActionCertificate(
-        created_by_agent=req.agent,
-        target_component=req.target_component,
-        action_type=req.action_type,
-        action_description=req.description,
-        supporting_evidence=req.evidence,
-    )
-    cert.compute_dynamic_risk()
-
-    # Evaluate against policy
-    sid = os.getenv("GCP_TOOLKIT_HANA_SID", os.getenv("HANA_SID", ""))
-    budget = _risk_budgets.get(sid, RiskBudget())
-    decision = PolicyEngine.evaluate(cert, budget)
-    cert.status = "approved" if decision["decision"] == "APPROVED" else "pending"
-    cert.sign()
-
-    _certificates[cert.certificate_id] = cert
-
-    # Generate X-Fix Report
-    xfix = XFixReport(
-        certificate_id=cert.certificate_id,
-        summary=req.description,
-        trigger_event=f"Incident {incident_id}",
-        risk_score=cert.risk_score,
-        budget_cost=cert.risk_budget_cost,
-        approval_required=decision["decision"] == "NEEDS_APPROVAL",
-    )
-    _xfix_reports[xfix.report_id] = xfix
-
-    # Update incident state
-    incident = _incidents[incident_id]
-    incident.action_certificate = cert.model_dump()
-    incident.xfix_explanation = xfix.model_dump()
-    incident.audit_trail.append(
-        {
-            "timestamp": datetime.utcnow().isoformat(),
-            "event": "remediation_proposed",
-            "certificate_id": cert.certificate_id,
-            "policy_decision": decision,
-        }
-    )
-
-    return {
-        "certificate_id": cert.certificate_id,
-        "xfix_report_id": xfix.report_id,
-        "policy_decision": decision,
-        "xfix_text": xfix.render_text(),
-    }
-
-
-@app.post("/api/v1/remediations/{cert_id}/approve")
-def approve_remediation(cert_id: str, req: ApprovalRequest):
-    """Human approval of Action Certificate."""
-    if cert_id not in _certificates:
-        raise HTTPException(status_code=404, detail="Certificate not found")
-
-    cert = _certificates[cert_id]
-    cert.approve(req.approved_by, req.notes)
-    return {
-        "certificate_id": cert_id,
-        "status": "approved",
-        "approved_by": req.approved_by,
-    }
-
-
-@app.post("/api/v1/remediations/{cert_id}/execute")
-def execute_remediation(cert_id: str):
-    """Trigger execution of an approved Action Certificate."""
-    if cert_id not in _certificates:
-        raise HTTPException(status_code=404, detail="Certificate not found")
-
-    cert = _certificates[cert_id]
-    if cert.status != "approved":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Certificate status is '{cert.status}', must be 'approved'",
-        )
-
-    # Deduct risk budget
-    sid = os.getenv("GCP_TOOLKIT_HANA_SID", os.getenv("HANA_SID", ""))
-    budget = _risk_budgets.get(sid, RiskBudget())
-    if not budget.can_afford(cert.action_type):
-        raise HTTPException(status_code=403, detail="Insufficient risk budget")
-
-    txn = budget.deduct(cert.action_type, cert.created_by_agent)
-    cert.status = "executed"
-
-    return {
-        "certificate_id": cert_id,
-        "status": "executed",
-        "budget_transaction": txn,
-        "governance_mode": budget.governance_mode,
-    }
-
-
-@app.post("/api/v1/remediations/{cert_id}/rollback")
-def rollback_remediation(cert_id: str):
-    """Trigger rollback of an executed Action Certificate."""
-    if cert_id not in _certificates:
-        raise HTTPException(status_code=404, detail="Certificate not found")
-
-    cert = _certificates[cert_id]
-    cert.status = "rolled_back"
-    return {
-        "certificate_id": cert_id,
-        "status": "rolled_back",
-        "rollback_steps": cert.rollback_steps,
-    }
-
-
-# ──────────────────────────────────────────────
-# Risk Budget Endpoints
-# ──────────────────────────────────────────────
-@app.get("/api/v1/risk-budgets/{system_id}")
-def get_risk_budget(system_id: str):
-    """Current risk budget status."""
-    if system_id not in _risk_budgets:
-        _risk_budgets[system_id] = RiskBudget(system_id=system_id)
-    budget = _risk_budgets[system_id]
-    return {
-        "system_id": system_id,
-        "effective_budget": budget.effective_budget,
-        "current_points": budget.current_points,
-        "consumed_today": budget.consumed_today,
-        "utilization_pct": round(budget.utilization_pct, 1),
-        "governance_mode": budget.governance_mode,
-        "trust_multiplier": budget.trust_multiplier,
-    }
-
-
-@app.get("/api/v1/risk-budgets/{system_id}/transactions")
-def get_budget_transactions(system_id: str):
-    """Budget transaction history."""
-    if system_id not in _risk_budgets:
-        raise HTTPException(status_code=404, detail="Budget not found")
-    return {
-        "system_id": system_id,
-        "transactions": _risk_budgets[system_id].transactions,
-    }
 
 
 # ──────────────────────────────────────────────
@@ -371,13 +204,6 @@ AGENT_DEFINITIONS = {
         "risk_tier": "medium",
         "description": "Monitors and predicts capacity requirements"
     },
-    "security_agent": {
-        "name": "Security Agent",
-        "module": "adk_app.agents.security_agent",
-        "class": "SecurityAgent",
-        "risk_tier": "high",
-        "description": "Audits privileges and security configurations"
-    },
     "browser_agent": {
         "name": "Browser-Use Agent",
         "module": "adk_app.agents.browser_agent",
@@ -386,21 +212,21 @@ AGENT_DEFINITIONS = {
         "description": "Automates browser-based tasks for SAP support"
     },
     "instance_monitor_agent": {
-        "name": "Instance Monitor Agent",
+        "name": "VM Monitor Agent",
         "module": "adk_app.agents.instance_monitor_agent",
         "class": "InstanceMonitorAgent",
         "risk_tier": "low",
         "description": "Monitors GCP instance health and diagnostics"
     },
     "instance_backup_agent": {
-        "name": "Instance Backup Agent",
+        "name": "VM Backup Agent",
         "module": "adk_app.agents.instance_backup_agent",
         "class": "InstanceBackupAgent",
         "risk_tier": "medium",
         "description": "Manages GCP instance snapshots and backups"
     },
     "instance_healing_agent": {
-        "name": "Instance Healing Agent",
+        "name": "Healing Agent",
         "module": "adk_app.agents.instance_healing_agent",
         "class": "InstanceHealingAgent",
         "risk_tier": "high",
@@ -439,6 +265,218 @@ def list_agents():
     return {"agents": agents}
 
 
+@app.get("/api/v1/agents/graph")
+def get_agent_graph():
+    """Return the full agent graph structure for the flow visualization.
+
+    Introspects the real agent definitions from adk_app.agent to build
+    nodes (supervisor, sub-agents, tool groups) and edges dynamically.
+    """
+    try:
+        from .agent import root_agent
+    except Exception as exc:
+        logger.warning(f"Failed to import root_agent for graph: {exc}")
+        return {"nodes": [], "edges": [], "quick_actions": {}}
+
+    # ── colour palette for agents (cycle through) ──
+    _COLORS = [
+        "#10b981", "#3b82f6", "#f59e0b", "#06b6d4",
+        "#ec4899", "#14b8a6", "#8b5cf6", "#f97316",
+        "#6366f1", "#ef4444", "#22d3ee", "#a855f7",
+        "#84cc16",
+    ]
+
+    # ── Classify tool functions into named groups ──
+    _TOOL_GROUP_RULES = [
+        # (substring in module path or func name, group_id, label, description)
+        ("hana_tools",    "hana_tools",   "HANA Tools",   "Direct HANA connection & SQL"),
+        ("hana_client",   "hana_tools",   "HANA Tools",   "Direct HANA connection & SQL"),
+        ("instance_diagnostics", "instance_diag", "Instance Diagnostics", "Diagnostic checks via HTTP"),
+        ("instance_healing",     "instance_heal", "Instance Healing",     "Healing scripts via HTTP"),
+        ("gcp_snapshot",  "gcp_snapshots", "GCP Snapshots", "VM snapshot management"),
+        ("instance_logger","instance_log", "Instance Logger","Instance activity logging"),
+        ("rag_tools",     "rag_tools",    "RAG Tools",     "Knowledge base queries"),
+        ("log_preprocessor","log_preproc","Log Preprocessor","Log analysis & HDB storage"),
+        ("browser",       "browser_tools","Browser Tools",  "Web automation & verification"),
+        ("remote",        "remote_exec",  "Remote Exec",   "OS-level operations via HTTP"),
+        ("http_command",  "remote_exec",  "Remote Exec",   "OS-level operations via HTTP"),
+        ("diagnostic",    "instance_diag","Instance Diagnostics", "Diagnostic checks via HTTP"),
+        ("snapshot",      "gcp_snapshots","GCP Snapshots", "VM snapshot management"),
+        ("verify",        "browser_tools","Browser Tools",  "Web automation & verification"),
+        ("healing",       "instance_heal","Instance Healing","Healing scripts via HTTP"),
+    ]
+
+    def _classify_tool(func) -> tuple:
+        """Return (group_id, group_label, group_desc) for a tool function."""
+        module = getattr(func, "__module__", "") or ""
+        name = getattr(func, "__name__", "") or ""
+        for substr, gid, label, desc in _TOOL_GROUP_RULES:
+            if substr in module or substr in name:
+                return gid, label, desc
+        return "other_tools", "Other Tools", "Miscellaneous tools"
+
+    # ── Build supervisor node ──
+    nodes = []
+    edges = []
+    tool_groups = {}          # group_id -> {label, desc}
+    agent_tool_links = {}     # agent_id -> set of group_ids
+
+    nodes.append({
+        "id": "supervisor",
+        "label": root_agent.name.replace("_", " ").title() if hasattr(root_agent, "name") else "Supervisor",
+        "description": (root_agent.description or "Orchestrates all agents")[:120],
+        "color": "#8b5cf6",
+        "type": "supervisor",
+        "risk_tier": "orchestrator",
+        "status": "active",
+        "tools": [],
+    })
+
+    # ── Build sub-agent nodes from the actual root_agent.sub_agents ──
+    sub_agents = getattr(root_agent, "sub_agents", []) or []
+    for idx, sa in enumerate(sub_agents):
+        agent_id = getattr(sa, "name", f"agent_{idx}")
+        color = _COLORS[idx % len(_COLORS)]
+
+        # Collect the tool functions attached to this agent
+        tools_list = getattr(sa, "tools", []) or []
+        tool_names = []
+        linked_groups = set()
+        for t in tools_list:
+            fname = getattr(t, "__name__", str(t))
+            tool_names.append(fname)
+            gid, glabel, gdesc = _classify_tool(t)
+            linked_groups.add(gid)
+            tool_groups[gid] = {"label": glabel, "description": gdesc}
+
+        agent_tool_links[agent_id] = linked_groups
+
+        # Lookup runtime status from AGENT_DEFINITIONS if present
+        agent_def = AGENT_DEFINITIONS.get(agent_id, {})
+        risk_tier = agent_def.get("risk_tier", "medium")
+        status = _check_agent_status(agent_id) if agent_id in AGENT_DEFINITIONS else "available"
+
+        nodes.append({
+            "id": agent_id,
+            "label": agent_def.get("name", sa.name.replace("_", " ").title()),
+            "description": (agent_def.get("description") or (sa.description or "")[:120]),
+            "color": color,
+            "type": "agent",
+            "risk_tier": risk_tier,
+            "status": "active" if status == "available" else "error" if status == "unavailable" else "idle",
+            "tools": tool_names,
+        })
+
+        # Edge: supervisor -> agent
+        edges.append({
+            "id": f"e-sup-{agent_id}",
+            "source": "supervisor",
+            "target": agent_id,
+        })
+
+    # ── Build tool-group nodes ──
+    for gid, ginfo in tool_groups.items():
+        nodes.append({
+            "id": gid,
+            "label": ginfo["label"],
+            "description": ginfo["description"],
+            "color": "#6366f1",
+            "type": "tool_group",
+            "risk_tier": "tool",
+            "status": "idle",
+            "tools": [],
+        })
+
+    # ── Edges: agent -> tool-group ──
+    for agent_id, groups in agent_tool_links.items():
+        for gid in groups:
+            edges.append({
+                "id": f"e-{agent_id}-{gid}",
+                "source": agent_id,
+                "target": gid,
+            })
+
+    # ── Quick actions (derive from agent descriptions + sensible defaults) ──
+    _DEFAULT_QUICK_ACTIONS = {
+        "supervisor": [
+            {"label": "Status summary", "prompt": "Give me a status summary of all agents and system health"},
+            {"label": "Full diagnostics", "prompt": "Run a full diagnostic check on the HANA system"},
+        ],
+    }
+
+    _KEYWORD_QUICK_ACTIONS = {
+        "health": [
+            {"label": "Health check", "prompt": "Run a health check on the HANA system"},
+            {"label": "Check services", "prompt": "Check all HANA service statuses"},
+            {"label": "Memory analysis", "prompt": "Analyze current memory usage on the HANA system"},
+        ],
+        "backup": [
+            {"label": "Backup status", "prompt": "Show the current backup status and last successful backup"},
+            {"label": "List backups", "prompt": "List all recent HANA backups with their status"},
+        ],
+        "recovery": [
+            {"label": "Recovery readiness", "prompt": "Check disaster recovery readiness and latest recovery points"},
+            {"label": "List snapshots", "prompt": "Show all available snapshots for recovery"},
+        ],
+        "sql_tuning": [
+            {"label": "Top queries", "prompt": "Show the top expensive SQL queries currently running"},
+            {"label": "Index suggestions", "prompt": "Analyze the system for index optimization opportunities. First query these views and collect all data: 1) SELECT TOP 20 STATEMENT_STRING, EXECUTION_COUNT, TOTAL_EXECUTION_TIME, AVG_EXECUTION_TIME FROM M_SQL_PLAN_CACHE ORDER BY TOTAL_EXECUTION_TIME DESC 2) SELECT SCHEMA_NAME, TABLE_NAME, INDEX_NAME, INDEX_TYPE, CONSTRAINT FROM INDEXES WHERE SCHEMA_NAME NOT LIKE '_SYS%' ORDER BY SCHEMA_NAME, TABLE_NAME 3) SELECT TOP 20 STATEMENT_STRING, DURATION_MICROSEC, CPU_TIME, LOCK_WAIT_DURATION FROM M_EXPENSIVE_STATEMENTS ORDER BY DURATION_MICROSEC DESC 4) SELECT SCHEMA_NAME, TABLE_NAME, RECORD_COUNT, TABLE_SIZE FROM M_CS_TABLES WHERE SCHEMA_NAME NOT LIKE '_SYS%' ORDER BY TABLE_SIZE DESC LIMIT 30. Then based on ALL collected data, suggest specific CREATE INDEX statements with reasoning for each, showing which slow queries each index would improve."},
+        ],
+        "capacity": [
+            {"label": "Disk usage", "prompt": "Show current disk usage and capacity forecast"},
+            {"label": "Growth trend", "prompt": "Analyze data growth trend for the last 30 days"},
+        ],
+        "browser": [
+            {"label": "Search SAP notes", "prompt": "Search SAP notes for recent HANA patches and fixes"},
+            {"label": "Find docs", "prompt": "Find SAP documentation for HANA backup and recovery best practices"},
+        ],
+        "rag": [
+            {"label": "Search knowledge", "prompt": "Search our knowledge base for recent SAP HANA issues"},
+            {"label": "Ingest note", "prompt": "Ingest a new SAP note into the knowledge base"},
+        ],
+        "verifier": [
+            {"label": "Verify HANA cockpit", "prompt": "Verify HANA Cockpit shows healthy system status"},
+            {"label": "Cross-validate", "prompt": "Cross-validate system health between browser and SQL data"},
+        ],
+        "monitoring": [
+            {"label": "Container health", "prompt": "Check Docker container health status"},
+            {"label": "HDB storage", "prompt": "Check HDB storage paths and usage"},
+        ],
+        "instance_monitor": [
+            {"label": "Run diagnostics", "prompt": "Run a full diagnostic check on the HANA instance"},
+            {"label": "Check processes", "prompt": "Check HANA process status on the instance"},
+        ],
+        "instance_backup": [
+            {"label": "Create snapshot", "prompt": "Create a new VM snapshot of the HANA instance"},
+            {"label": "List snapshots", "prompt": "List all GCP VM snapshots"},
+        ],
+        "instance_healing": [
+            {"label": "List healing options", "prompt": "Show available healing scripts and their risk levels"},
+            {"label": "Check healing status", "prompt": "Check the status of recent healing operations"},
+        ],
+    }
+
+    quick_actions = dict(_DEFAULT_QUICK_ACTIONS)
+    for sa in sub_agents:
+        agent_id = getattr(sa, "name", "")
+        # Match by keyword in agent_id
+        for keyword, actions in _KEYWORD_QUICK_ACTIONS.items():
+            if keyword in agent_id:
+                quick_actions[agent_id] = actions
+                break
+        if agent_id not in quick_actions:
+            # Generic fallback
+            quick_actions[agent_id] = [
+                {"label": "Status", "prompt": f"What is the current status of {agent_id.replace('_', ' ')}?"},
+            ]
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "quick_actions": quick_actions,
+    }
+
+
 @app.get("/api/v1/agents/{agent_id}/decisions")
 def get_agent_decisions(agent_id: str):
     """Agent decision history (filtered from certificates)."""
@@ -451,38 +489,6 @@ def get_agent_decisions(agent_id: str):
 
 
 # ──────────────────────────────────────────────
-# Replay Endpoints
-# ──────────────────────────────────────────────
-@app.post("/api/v1/replays")
-def create_replay(req: ReplayCreate):
-    """Create incident replay for what-if analysis."""
-    if req.incident_id not in _incidents:
-        raise HTTPException(status_code=404, detail="Incident not found")
-
-    replay_id = str(uuid.uuid4())
-    _replays[replay_id] = {
-        "replay_id": replay_id,
-        "original_incident_id": req.incident_id,
-        "modified_policies": req.modified_policies,
-        "status": "created",
-        "created_at": datetime.utcnow().isoformat(),
-    }
-    return {"replay_id": replay_id, "status": "created"}
-
-
-@app.get("/api/v1/replays/{replay_id}/comparison")
-def get_replay_comparison(replay_id: str):
-    """Original vs replay comparison."""
-    if replay_id not in _replays:
-        raise HTTPException(status_code=404, detail="Replay not found")
-    return {
-        "replay_id": replay_id,
-        "replay": _replays[replay_id],
-        "comparison": "Replay analysis would show differences in agent decisions with modified policies.",
-    }
-
-
-# ──────────────────────────────────────────────
 # RAG Query Endpoint
 # ──────────────────────────────────────────────
 @app.post("/api/v1/rag/query")
@@ -490,6 +496,13 @@ def query_rag(req: RAGQueryRequest):
     """Query RAG knowledge base."""
     result = rag_query(req.question)
     return result
+
+
+# Frontend uses /api/v1/tools/rag — alias for rag/query
+@app.post("/api/v1/tools/rag")
+def query_rag_alias(req: RAGQueryRequest):
+    """Query RAG knowledge base (frontend alias)."""
+    return query_rag(req)
 
 
 # ──────────────────────────────────────────────
@@ -525,41 +538,6 @@ def validate_global_ini():
 
 
 # ──────────────────────────────────────────────
-# Security Patch Day Endpoint
-# ──────────────────────────────────────────────
-@app.post("/api/v1/security/patch-day/assess")
-def assess_patch_day():
-    """Assess Patch Day impact on landscape.
-
-    Note: This endpoint queries the RAG knowledge base for security notes.
-    Real patch data should come from SAP Support Portal integration.
-    """
-    # Get current HANA version from actual database
-    version = None
-    try:
-        version_result = query_hana("SELECT VERSION FROM M_DATABASE")
-        if version_result["status"] == "success" and version_result["rows"]:
-            version = version_result["rows"][0].get("VERSION")
-    except Exception:
-        pass
-
-    # Query RAG for any relevant security advisories
-    rag_result = {}
-    try:
-        rag_result = rag_query("SAP HANA security notes patch day assessment")
-    except Exception:
-        pass
-
-    return {
-        "hana_version": version,
-        "rag_assessment": rag_result.get("answer") if rag_result else None,
-        "sources": rag_result.get("sources", []) if rag_result else [],
-        "note": "Real patch data requires SAP Support Portal API integration",
-        "timestamp": datetime.utcnow().isoformat(),
-    }
-
-
-# ──────────────────────────────────────────────
 # System Health Quick Check
 # ──────────────────────────────────────────────
 @app.get("/api/v1/health")
@@ -588,7 +566,6 @@ def system_health():
         ini = {"status": "error"}
 
     sid = os.getenv("GCP_TOOLKIT_HANA_SID", os.getenv("HANA_SID", ""))
-    budget = _risk_budgets.get(sid, RiskBudget())
 
     return {
         "status": "healthy" if db_connected else "degraded",
@@ -596,10 +573,6 @@ def system_health():
         "hana_connection": conn,
         "sapcontrol": processes,
         "global_ini": ini,
-        "risk_budget": {
-            "governance_mode": budget.governance_mode,
-            "utilization_pct": round(budget.utilization_pct, 1),
-        },
         "agents_registered": len(AGENT_DEFINITIONS),
         "timestamp": datetime.utcnow().isoformat(),
     }
@@ -653,6 +626,31 @@ def force_reconnect():
     return {"status": "in_progress", "message": "Reconnection started"}
 
 
+@app.get("/api/v1/force-reconnect/auto")
+def auto_reconnect_if_needed():
+    """Auto-reconnect if DB is disconnected. Called by frontend on load.
+    Unlike force-reconnect, this is idempotent and only acts when needed."""
+    global _startup_reconnect_done
+
+    # If already connected, return immediately
+    with _metrics_lock:
+        if _cached_metrics and _cached_metrics.get("database_connected"):
+            return {"status": "already_connected", "database_connected": True}
+
+    # Trigger reconnect only once per server lifetime until connected
+    with _reconnect_lock:
+        if _reconnect_status["in_progress"]:
+            return {"status": "in_progress", "message": "Reconnection already in progress"}
+        _reconnect_status["in_progress"] = True
+        _reconnect_status["result"] = None
+
+    thread = threading.Thread(target=_reconnect_background, daemon=True)
+    thread.start()
+    _startup_reconnect_done = True
+
+    return {"status": "in_progress", "message": "Auto-reconnection started"}
+
+
 @app.get("/api/v1/force-reconnect")
 def force_reconnect_status():
     """Poll for the result of a force-reconnect attempt."""
@@ -685,17 +683,21 @@ def agent_chat(req: AgentChatRequest):
         "timestamp": datetime.utcnow().isoformat()
     })
 
-    # TODO: Integrate with actual Google ADK agent
-    # For now, provide a basic response
-    result = generate_agent_response(
-        req.message,
-        admin_mode=req.admin_mode,
-        use_browser=req.use_browser,
-        autonomous_browser=req.autonomous_browser,
-        voice_mode=req.voice_mode,
-    )
+    try:
+        result = generate_agent_response(
+            req.message,
+            admin_mode=req.admin_mode,
+            use_browser=req.use_browser,
+            autonomous_browser=req.autonomous_browser,
+            voice_mode=req.voice_mode,
+        )
+    except Exception as e:
+        logger.exception(f"generate_agent_response failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
     response_text = result.get("response", "")
     sources = result.get("sources", [])
+    browser_active = result.get("browser_active", False)
     
     # Add assistant response to conversation
     _conversations[conversation_id].append({
@@ -704,12 +706,15 @@ def agent_chat(req: AgentChatRequest):
         "timestamp": datetime.utcnow().isoformat()
     })
     
-    return {
+    resp = {
         "conversation_id": conversation_id,
         "response": response_text,
         "sources": sources,
         "timestamp": datetime.utcnow().isoformat()
     }
+    if browser_active:
+        resp["browser_active"] = True
+    return resp
 
 
 class BrowseRequest(BaseModel):
@@ -738,7 +743,7 @@ def get_conversation(conversation_id: str):
     }
 
 
-def _extract_command_with_llm(user_text: str) -> Optional[str]:
+def _extract_command_with_llm(user_text: str, model: Optional[str] = None) -> Optional[str]:
     """Use configured LLM to classify intent and extract a shell command if appropriate."""
     try:
         from .aicore_client import get_aicore_client
@@ -770,6 +775,10 @@ def _extract_command_with_llm(user_text: str) -> Optional[str]:
             "  - System admin tasks: 'restart indexserver', 'list files in /hana/shared'\n\n"
             "IMPORTANT: When the user mentions uptime, disk, memory, cpu, process, load, " 
             "swap, space, running, status of a SERVER — they want the LIVE data, not a definition.\n\n"
+            "HANA SQL queries: Use hdbsql with userstore key DEFAULT, e.g.:\n"
+            "  hdbsql -U DEFAULT \"SELECT * FROM M_SERVICES\"\n"
+            "  hdbsql -U DEFAULT \"SELECT * FROM M_SNAPSHOTS\"\n"
+            "Never use placeholder <user> — always use -U DEFAULT.\n\n"
             "Rules:\n"
             "- If LIVE SYSTEM CHECK → return ONLY the raw shell command, no backticks, no explanation\n"
             "- If KNOWLEDGE QUESTION → return exactly: NO_COMMAND\n"
@@ -782,6 +791,7 @@ def _extract_command_with_llm(user_text: str) -> Optional[str]:
             system_prompt=system_prompt,
             temperature=0.0,
             max_tokens=120,
+            model=model,
         )
         if not llm_response:
             logger.warning("LLM returned empty response for command extraction")
@@ -857,22 +867,28 @@ def _extract_command_heuristic(message: str, msg_lower: str) -> str:
     return command
 
 
-def _answer_with_llm(question: str) -> dict:
+def _answer_with_llm(question: str, model: Optional[str] = None) -> dict:
     """Answer a knowledge question using only the LLM (no web browsing)."""
     try:
         from .aicore_client import get_aicore_client
 
         client = get_aicore_client()
         if client.is_configured():
+            diag_context = _get_diagnostic_context()
             system_prompt = (
                 "You are an SAP HANA expert assistant. Answer the user's question concisely "
                 "and accurately. If you are not sure about something, say so."
             )
+            if diag_context:
+                system_prompt += (
+                    "\n\nRecent diagnostic history from this system:\n" + diag_context
+                )
             answer = client.generate_text(
                 prompt=question,
                 system_prompt=system_prompt,
                 temperature=0.3,
                 max_tokens=1024,
+                model=model,
             )
             if answer:
                 return {"response": answer.strip(), "sources": []}
@@ -928,50 +944,45 @@ def _browse_and_answer(question: str, use_autonomous_browser: bool = False) -> d
     sources = []
     context = ""
 
-    # Try Playwright browser first for visual browsing (Manus-style)
+    # Try browser-use agent (headless, no GUI)
     if use_autonomous_browser:
         try:
-            import asyncio
-            from .tools.playwright_browser import browse_with_playwright
-
-            logger.info(f"Using Playwright browser for: {question[:50]}...")
-            result = asyncio.run(browse_with_playwright(
-                query=question,
-                headless=True,
-                max_pages=3,
-            ))
-
-            if result.get("response") and "not installed" not in result.get("response", ""):
-                context = result.get("response", "")
-                sources = result.get("sources", [])
-                logger.info(f"Playwright browser returned {len(sources)} sources")
-
-                # Return with flag indicating Playwright was used
-                return {
-                    "response": context,
-                    "sources": sources,
-                    "use_playwright": True,
-                    "actions": result.get("actions", []),
-                }
-        except Exception as exc:
-            logger.warning(f"Playwright browser failed: {exc}, falling back to web scraping")
-
-    # Try browser-use agent as second option
-    if not context and use_autonomous_browser:
-        try:
             from .agents.browser_agent import BrowserUseAgent
-            browser_agent = BrowserUseAgent()
+            browser_agent = BrowserUseAgent(headless=False)
             logger.info(f"Using browser-use agent for: {question[:50]}...")
-            result = browser_agent.run_task(f"Search the web and find information about: {question}")
+
+            # SAP knowledge sources to search (ordered by relevance)
+            sap_sources = [
+                ("https://userapps.support.sap.com/sap/support/knowledge/en", "SAP Knowledge Base Articles (KBA)"),
+                ("https://me.sap.com/notes", "SAP Notes"),
+                ("https://help.sap.com/docs/SAP_HANA_PLATFORM", "SAP HANA Help Portal"),
+                ("https://community.sap.com/t5/technology-blogs-by-sap/bg-p/technology-blog-sap", "SAP Community Blogs"),
+                ("https://community.sap.com/t5/technology-q-a/qa-p/technology-questions", "SAP Community Q&A"),
+                ("https://help.sap.com/docs/SAP_HANA_PLATFORM/009e68bc5f3c440cb31823a3ec4bb95b", "SAP HANA Administration Guide"),
+                ("https://help.sap.com/docs/SAP_HANA_PLATFORM/4fe29514fd584807ac9f2a04f6754767", "SAP HANA Troubleshooting Guide"),
+                ("https://help.sap.com/docs/SAP_HANA_PLATFORM/6b94445c94ae495c83a19646e7c3fd56", "SAP HANA SQL Reference"),
+            ]
+
+            source_instructions = "\n".join(
+                f"  {i+1}. {name}: {url}" for i, (url, name) in enumerate(sap_sources)
+            )
+            browser_task = (
+                f"Search for information about: {question}\n\n"
+                f"Search these SAP knowledge sources in order. Stop once you find relevant content:\n"
+                f"{source_instructions}\n"
+                f"  {len(sap_sources)+1}. If none of the above have results, search the web broadly."
+            )
+            result = browser_agent.run_task(browser_task)
             if result and "failed" not in result.lower():
                 context = result
-                sources.append({
-                    "url": "browser-use-agent",
-                    "title": "Autonomous Browser Agent",
-                    "status": "ok",
-                    "source": "browser_use",
-                })
-                logger.info("Browser-use agent returned results")
+                for url, title in sap_sources:
+                    sources.append({
+                        "url": url,
+                        "title": title,
+                        "status": "searched",
+                        "source": "browser_use",
+                    })
+                logger.info("Browser-use agent returned results (SAP KBs + web)")
         except ImportError:
             logger.warning("browser-use library not installed, falling back to web scraping")
         except Exception as exc:
@@ -1133,7 +1144,7 @@ SET ('trace', 'maxfiles') = '20' WITH RECONFIGURE;
 """
 
 
-def _summarize_output_for_voice(command: str, output: str) -> str:
+def _summarize_output_for_voice(command: str, output: str, model: Optional[str] = None) -> str:
     """Use the LLM to create a brief spoken-word summary of command output."""
     try:
         from .aicore_client import get_aicore_client
@@ -1153,6 +1164,7 @@ def _summarize_output_for_voice(command: str, output: str) -> str:
             system_prompt=system_prompt,
             temperature=0.2,
             max_tokens=200,
+            model=model,
         )
         if summary and summary.strip():
             return summary.strip()
@@ -1177,7 +1189,16 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
     """
     from .tools.http_command_executor import get_http_executor, execute_hana_command
 
-    msg_lower = message.lower()
+    # Voice mode uses Sonnet model for higher quality spoken responses
+    _voice_model = os.getenv("VOICE_LLM_MODEL", "anthropic--claude-4.6-sonnet") if voice_mode else None
+
+    # Inject diagnostic history context into the message for the LLM
+    diag_context = _get_diagnostic_context()
+    original_message = message
+    if diag_context:
+        message = f"{message}\n\n[System context — recent diagnostics]\n{diag_context}"
+
+    msg_lower = original_message.lower()
 
     # Check for explicit command execution requests
     command_keywords = ["run ", "execute ", "exec ", "show me ", "check "]
@@ -1201,6 +1222,7 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
         "running", "disk space", "free space", "swap", "filesystem",
         "mount", "partition", "service", "port", "network", "connection",
         "backup status", "hana status", "instance", "restart",
+        "snapshot",
     ]
     mentions_system_check = any(kw in msg_lower for kw in system_check_keywords)
 
@@ -1220,7 +1242,7 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
         r'\bapt\b', r'\byum\b', r'\bdnf\b', r'\bzypper\b', r'\bpip\b',
         r'\bcurl\b.*-[dXP]', r'\bwget\b',  # curl with POST/PUT/DELETE, wget downloads
         r'\bsed\b.*-i', r'\btruncate\b',  # in-place sed edits
-        r'\btee\b', r'>',  # redirections that write files
+        r'\btee\b', r'(?<![<\w])\s*>', r'>>',  # shell redirections (but not <user> or SQL >)
         r'\bDROP\b', r'\bDELETE\b', r'\bTRUNCATE\b', r'\bALTER\b', r'\bINSERT\b', r'\bUPDATE\b', r'\bCREATE\b',
         r'\bHDB\s+stop\b', r'\bHDB\s+kill\b',
         r'\bStopSystem\b', r'\bStopService\b', r'\bRestartService\b', r'\bRestartSystem\b',
@@ -1229,22 +1251,359 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
     def _is_read_only(cmd: str) -> bool:
         """Return True if the command is safe (read-only)."""
         import re as _re
+        # hdbsql with SELECT-only queries is always safe
+        if cmd.strip().startswith("hdbsql"):
+            has_select = _re.search(r'\bSELECT\b', cmd, _re.IGNORECASE)
+            _dangerous_sql = [r'\bDROP\b', r'\bDELETE\b', r'\bTRUNCATE\b', r'\bALTER\b',
+                              r'\bINSERT\b', r'\bUPDATE\b', r'\bCREATE\b', r'\bGRANT\b', r'\bREVOKE\b']
+            has_dangerous = any(_re.search(p, cmd, _re.IGNORECASE) for p in _dangerous_sql)
+            if has_select and not has_dangerous:
+                return True
         for pat in _DANGEROUS_PATTERNS:
             if _re.search(pat, cmd, _re.IGNORECASE):
                 return False
         return True
 
+    def _is_remote_forbidden(result: dict) -> bool:
+        """Check if executor result is a remote server 403/forbidden."""
+        err = (result.get("error", "") or "").lower()
+        return "403" in err or "not allowed" in err or "forbidden" in err
+
     def _reject_write(cmd: str):
-        """Return a rejection response for blocked commands."""
+        """Return a rejection response for blocked commands and queue for approval."""
+        # Fire-and-forget: queue the command for approval with enrichment
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(_queue_restricted_command(cmd, source="chat", user_request=original_message))
+            else:
+                import threading
+                _orig = original_message
+                threading.Thread(
+                    target=lambda: asyncio.run(_queue_restricted_command(cmd, source="chat", user_request=_orig)),
+                    daemon=True,
+                ).start()
+        except Exception:
+            # Best-effort — don't break the chat response
+            import threading
+            _orig = original_message
+            threading.Thread(
+                target=lambda: asyncio.run(_queue_restricted_command(cmd, source="chat", user_request=_orig)),
+                daemon=True,
+            ).start()
+
         if voice_mode:
-            return _resp(f"Sorry, the command {cmd.split()[0]} is blocked because it can modify the system. I can only run read-only commands.")
-        return _resp(f"**Blocked:** `{cmd}`\n\nThis command is not allowed. Only read-only inspection commands are permitted via this interface.")
+            return _resp(f"Sorry, the command {cmd.split()[0]} is blocked because it can modify the system. It has been queued for admin approval in the Healing Approvals page.")
+        return _resp(
+            f"**Blocked:** `{cmd}`\n\n"
+            "This command is restricted and cannot be executed directly. "
+            "It has been **queued for approval** in the [Healing Approvals](/instance-approvals) page "
+            "with AI analysis and SAP documentation references. "
+            "An administrator can review and approve it there."
+        )
+
+    # ── Autonomous browser short-circuit ─────────────────────
+    # When autonomous browser is ON for a knowledge query, the WebSocket
+    # /ws/browser-stream handles all Playwright execution and streaming.
+    # Return a placeholder so the frontend knows to wait for the WS result.
+    if autonomous_browser and not has_shell_command and not is_command_request and not mentions_system_check:
+        return {
+            "response": "Browsing the web for an answer...",
+            "sources": [],
+            "browser_active": True,
+        }
+
+    # Dynamic instance number for sapcontrol commands
+    _inst_nr = os.getenv("HANA_INSTANCE_NR", os.getenv("GCP_TOOLKIT_INSTANCE_NUMBER", "02"))
+
+    # ── Agent-aware intent routing ───────────────────────────
+    # Routes known agent prompts to proper HANA SQL queries or combined
+    # checks BEFORE the crude keyword→shell-command fallback.
+    # This ensures "backup status" queries M_BACKUP_CATALOG instead of
+    # running `ls /hana/backup/`, "top queries" queries M_SQL_PLAN_CACHE
+    # instead of running `uptime`, etc.
+    _AGENT_INTENT_ROUTES = [
+        # ── Supervisor (checked first — prompts overlap with other agents) ──
+        {
+            "keywords": ["status summary", "all agents"],
+            "type": "multi",
+            "commands": [
+                {"type": "api", "endpoint": "/hana/services", "label": "HANA Services"},
+                {"type": "api", "endpoint": "/hana/metrics", "label": "HANA Metrics"},
+                {"type": "api", "endpoint": "/operational/backup-status", "label": "Backup Status"},
+                {"type": "api", "endpoint": "/hana/alerts", "label": "Alerts"},
+            ],
+            "label": "Agent Status Summary",
+        },
+        {
+            "keywords": ["full diagnostic", "full diagnostics", "diagnostic check"],
+            "type": "api",
+            "endpoint": "/diagnostics",
+            "label": "Full System Diagnostics",
+        },
+        # ── Backup Agent ─────────────────────────────────────
+        {
+            "keywords": ["backup status", "last successful backup", "last backup"],
+            "type": "api",
+            "endpoint": "/operational/backup-status",
+            "label": "HANA Backup Status",
+        },
+        {
+            "keywords": ["list backups", "list all recent", "recent hana backups", "recent backups"],
+            "type": "hana_sql",
+            "query": (
+                "SELECT TOP 20 BACKUP_ID, ENTRY_TYPE_NAME, STATE_NAME, "
+                "SYS_START_TIME, SYS_END_TIME, COMMENT, MESSAGE "
+                "FROM M_BACKUP_CATALOG "
+                "ORDER BY SYS_END_TIME DESC"
+            ),
+            "label": "Recent HANA Backups",
+        },
+        # ── Health Agent ──────────────────────────────────────
+        {
+            "keywords": ["health check", "run a health check", "system health"],
+            "type": "api",
+            "endpoint": "/observability/system-health",
+            "label": "System Health Check",
+        },
+        {
+            "keywords": ["check services", "service status", "hana service"],
+            "type": "api",
+            "endpoint": "/hana/services",
+            "label": "HANA Service Status",
+        },
+        {
+            "keywords": ["memory analysis", "memory usage", "analyze memory", "analyze current memory"],
+            "type": "api",
+            "endpoint": "/observability/resource-utilization",
+            "label": "Memory & Resource Utilization",
+        },
+        # ── SQL Tuning Agent ──────────────────────────────────
+        {
+            "keywords": ["top queries", "expensive queries", "expensive sql", "top expensive"],
+            "type": "api",
+            "endpoint": "/hana/expensive-queries",
+            "label": "Top Expensive SQL Queries",
+        },
+        {
+            "keywords": ["index suggestion", "index optimization", "index opportunities"],
+            "type": "multi",
+            "commands": [
+                {
+                    "type": "api",
+                    "endpoint": "/hana/expensive-queries?top_n=20",
+                    "label": "Slow Queries",
+                },
+                {
+                    "type": "hana_sql",
+                    "query": (
+                        "SELECT SCHEMA_NAME, TABLE_NAME, INDEX_NAME, INDEX_TYPE, CONSTRAINT "
+                        "FROM INDEXES "
+                        "WHERE SCHEMA_NAME NOT LIKE '_SYS%' "
+                        "ORDER BY SCHEMA_NAME, TABLE_NAME"
+                    ),
+                    "label": "Existing Indexes",
+                },
+            ],
+            "label": "Index Analysis",
+        },
+        {
+            "keywords": ["active transaction", "running transaction"],
+            "type": "api",
+            "endpoint": "/hana/transactions",
+            "label": "Active Transactions",
+        },
+        {
+            "keywords": ["blocking", "blocked", "lock wait"],
+            "type": "api",
+            "endpoint": "/hana/blocking",
+            "label": "Blocked Transactions",
+        },
+        # ── Capacity Agent ────────────────────────────────────
+        {
+            "keywords": ["disk usage", "disk capacity", "capacity forecast"],
+            "type": "api",
+            "endpoint": "/capacity/growth-analysis",
+            "label": "Disk Usage & Capacity",
+        },
+        {
+            "keywords": ["growth trend", "data growth", "growth for the last"],
+            "type": "api",
+            "endpoint": "/capacity/growth-analysis",
+            "label": "Growth Analysis",
+        },
+        # ── Recovery Agent ────────────────────────────────────
+        {
+            "keywords": ["recovery readiness", "disaster recovery", "recovery points"],
+            "type": "hana_sql",
+            "query": (
+                "SELECT TOP 5 BACKUP_ID, ENTRY_TYPE_NAME, STATE_NAME, "
+                "SYS_START_TIME, SYS_END_TIME, MESSAGE "
+                "FROM M_BACKUP_CATALOG "
+                "WHERE ENTRY_TYPE_NAME = 'complete data backup' AND STATE_NAME = 'successful' "
+                "ORDER BY SYS_END_TIME DESC"
+            ),
+            "label": "Recovery Points (Latest Successful Backups)",
+        },
+        {
+            "keywords": ["list snapshots", "available snapshots", "show all available snapshots"],
+            "type": "hana_sql",
+            "query": (
+                "SELECT TOP 20 BACKUP_ID, ENTRY_TYPE_NAME, STATE_NAME, "
+                "SYS_START_TIME, SYS_END_TIME, COMMENT "
+                "FROM M_BACKUP_CATALOG "
+                "WHERE ENTRY_TYPE_NAME LIKE '%snap%' OR ENTRY_TYPE_NAME LIKE '%data%' "
+                "ORDER BY SYS_END_TIME DESC"
+            ),
+            "label": "Available Snapshots & Data Backups",
+        },
+        # ── Browser Agent (search patterns) ───────────────────
+        {
+            "keywords": ["search sap notes", "sap notes for"],
+            "type": "browse",
+            "label": "SAP Notes Search",
+        },
+        {
+            "keywords": ["find docs", "find sap documentation", "sap documentation"],
+            "type": "browse",
+            "label": "SAP Documentation Search",
+        },
+        # ── Alerts ────────────────────────────────────────────
+        {
+            "keywords": ["alert", "database alert", "hana alert"],
+            "type": "api",
+            "endpoint": "/hana/alerts",
+            "label": "HANA Alerts",
+        },
+        # ── RAG / Knowledge Base ──────────────────────────────
+        {
+            "keywords": ["search knowledge", "knowledge base", "search kb", "rag query", "search the knowledge base"],
+            "type": "rag",
+            "label": "Knowledge Base Search",
+        },
+        # ── Version / Info ────────────────────────────────────
+        {
+            "keywords": ["version", "hana version", "database version"],
+            "type": "api",
+            "endpoint": "/operational/version-info",
+            "label": "HANA Version & Configuration",
+        },
+    ]
+
+    def _execute_intent_route(route, voice_mode_flag=False):
+        """Execute an agent intent route — API endpoint, HANA SQL, shell, browse, or multi-step."""
+        import requests as _requests
+        from .tools.hana_tools import query_hana as _query_hana, _REMOTE_EXEC_URL, _remote_headers
+
+        if route["type"] == "api":
+            # Call a dedicated remote_exec_server_v2 endpoint directly
+            endpoint = route["endpoint"]
+            label = route.get("label", endpoint)
+            try:
+                url = f"{_REMOTE_EXEC_URL}{endpoint}"
+                resp = _requests.get(url, headers=_remote_headers(), timeout=60)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return _resp(f"**{label}**\n\n```json\n{json.dumps(data, indent=2, default=str)}\n```")
+                else:
+                    return _resp(f"**{label}** — Error: HTTP {resp.status_code}: {resp.text[:300]}")
+            except _requests.exceptions.ConnectionError:
+                return _resp(f"**{label}** — Error: Cannot reach remote server at {_REMOTE_EXEC_URL}")
+            except Exception as e:
+                return _resp(f"**{label}** — Error: {str(e)}")
+
+        elif route["type"] == "hana_sql":
+            result = _query_hana(route["query"])
+            label = route.get("label", "Query Result")
+            if result.get("status") == "success":
+                rows = result.get("rows", [])
+                if not rows:
+                    return _resp(f"**{label}**\n\nNo results returned.")
+                # Format rows as markdown table
+                if isinstance(rows[0], dict):
+                    headers = list(rows[0].keys())
+                    table_lines = ["| " + " | ".join(str(h) for h in headers) + " |"]
+                    table_lines.append("| " + " | ".join("---" for _ in headers) + " |")
+                    for row in rows:
+                        table_lines.append("| " + " | ".join(str(row.get(h, "")) for h in headers) + " |")
+                    table = "\n".join(table_lines)
+                else:
+                    table = "```\n" + "\n".join(str(r) for r in rows) + "\n```"
+                return _resp(f"**{label}**\n\n{table}")
+            else:
+                err = result.get("error_message", "Unknown error")
+                return _resp(f"**{label}** — Error: {err}")
+
+        elif route["type"] == "shell":
+            from .tools.http_command_executor import get_http_executor as _get_executor
+            ex = _get_executor()
+            if not ex.is_configured():
+                return _resp(f"**{route.get('label', 'Shell')}** — Error: Remote exec server not configured.")
+            res = ex.execute_command(route["command"], timeout=60, admin_override=True)
+            label = route.get("label", route["command"])
+            output = res.get("output", "").strip()
+            if res.get("status") == "success" or res.get("exit_code") == 0:
+                return _resp(f"**{label}**\n```\n{output or '(no output)'}\n```")
+            error = res.get("error", "") or output
+            return _resp(f"**{label}** — Error:\n```\n{error}\n```")
+
+        elif route["type"] == "browse":
+            # Delegate to the browser/knowledge pipeline
+            label = route.get("label", "Browser Search")
+            try:
+                browse_result = _browse_and_answer(original_message, use_autonomous_browser=False)
+                if browse_result.get("response"):
+                    return _resp(f"**{label}**\n\n{browse_result['response']}", browse_result.get("sources"))
+            except Exception as exc:
+                logger.warning(f"Browse route failed for {label}: {exc}")
+            return _resp(f"**{label}** — Could not retrieve results. Try rephrasing your question.")
+
+        elif route["type"] == "rag":
+            label = route.get("label", "Knowledge Base")
+            result = rag_query(original_message)
+            if result.get("status") == "success" and result.get("sources"):
+                sources_list = ", ".join(os.path.basename(s) for s in result["sources"])
+                return _resp(
+                    f"**{label}**\n\n{result['answer']}\n\n*Sources: {sources_list}*"
+                )
+            elif result.get("status") == "success":
+                return _resp(f"**{label}**\n\n{result.get('answer', 'No matching documents found.')}")
+            else:
+                return _resp(f"**{label}** — {result.get('error_message', 'Knowledge base search failed.')}")
+
+        elif route["type"] == "multi":
+            parts = []
+            for sub_cmd in route.get("commands", []):
+                sub_result = _execute_intent_route(sub_cmd, voice_mode_flag)
+                if sub_result:
+                    parts.append(sub_result["response"])
+            combined = "\n\n---\n\n".join(parts) if parts else "No results."
+            top_label = route.get("label", "Results")
+            return _resp(f"## {top_label}\n\n{combined}")
+
+        return None
+
+    # Try to match the message against known agent intents
+    _matched_intent = None
+    for _route in _AGENT_INTENT_ROUTES:
+        for _kw in _route["keywords"]:
+            if _kw in msg_lower:
+                _matched_intent = _route
+                break
+        if _matched_intent:
+            break
+
+    if _matched_intent:
+        _intent_result = _execute_intent_route(_matched_intent, voice_mode)
+        if _intent_result:
+            logger.info(f"Agent intent routed: '{_matched_intent.get('label')}' for message: {original_message[:80]}")
+            return _intent_result
 
     # In admin mode, let the LLM decide first — it can distinguish
     # "what is the server uptime?" (command) from "what is HANA replication?" (knowledge)
     if admin_mode:
         # Let the LLM decide if this is a command or a knowledge question
-        command = _extract_command_with_llm(message)
+        command = _extract_command_with_llm(original_message, model=_voice_model)
 
         if not command and mentions_system_check:
             # LLM said NO_COMMAND but user mentioned system keywords like uptime/disk/memory
@@ -1266,11 +1625,12 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
                 "port": "ss -tlnp",
                 "network": "ss -tlnp",
                 "connection": "ss -tlnp",
-                "hana status": "sapcontrol -nr 00 -function GetProcessList",
-                "instance": "sapcontrol -nr 00 -function GetProcessList",
-                "backup status": "ls -ltr /hana/backup/ 2>/dev/null || echo 'Backup dir not found'",
+                "hana status": f"sapcontrol -nr {_inst_nr} -function GetProcessList",
+                "instance": f"sapcontrol -nr {_inst_nr} -function GetProcessList",
+                "backup status": f"sapcontrol -nr {_inst_nr} -function GetProcessList",
                 "usage": "df -h; free -h",
-                "service": "sapcontrol -nr 00 -function GetProcessList",
+                "service": f"sapcontrol -nr {_inst_nr} -function GetProcessList",
+                "snapshot": f"sapcontrol -nr {_inst_nr} -function GetProcessList",
             }
             for kw, cmd in _system_keyword_commands.items():
                 if kw in msg_lower:
@@ -1279,14 +1639,18 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
                     break
 
         if not command:
-            # Truly a knowledge question — answer with LLM
+            # Truly a knowledge question — try RAG first, then browse, then LLM
+            rag_result = rag_query(message)
+            if rag_result.get("status") == "success" and rag_result.get("sources"):
+                sources_list = ", ".join(os.path.basename(s) for s in rag_result["sources"])
+                return _resp(f"{rag_result['answer']}\n\n*Sources: {sources_list}*")
             try:
-                browse_answer = _browse_and_answer(message, use_autonomous_browser=autonomous_browser)
+                browse_answer = _browse_and_answer(message, use_autonomous_browser=False)
                 if browse_answer.get("response") and "couldn't find" not in browse_answer.get("response", ""):
                     return browse_answer
             except Exception as exc:
                 logger.warning(f"Browse failed in admin mode fallback: {exc}")
-            return _answer_with_llm(message)
+            return _answer_with_llm(message, model=_voice_model)
 
         executor = get_http_executor()
         if not executor.is_configured():
@@ -1301,7 +1665,7 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
             output = result.get("output", "").strip()
             if output:
                 if voice_mode:
-                    summary = _summarize_output_for_voice(command, output)
+                    summary = _summarize_output_for_voice(command, output, model=_voice_model)
                     if summary:
                         return _resp(summary)
                     return _resp(f"Ran {command}. Result: {output[:500]}")
@@ -1310,6 +1674,8 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
             return _resp(msg)
 
         error = result.get("error", "") or result.get("output", "")
+        if _is_remote_forbidden(result):
+            return _reject_write(command)
         if voice_mode:
             return _resp(f"The command {command} failed. Error: {error[:300]}")
         return _resp(f"**Admin Command:** `{command}`\n\n**Error:**\n```\n{error}\n```")
@@ -1317,14 +1683,20 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
     # Non-admin mode: check for knowledge questions FIRST
     # This ensures "SAP Note 222221" goes to browser, not shell
     if _is_knowledge_question(msg_lower) and not has_shell_command and not mentions_system_check:
+        # Try RAG first, then browser, then LLM
+        rag_result = rag_query(message)
+        if rag_result.get("status") == "success" and rag_result.get("sources"):
+            sources_list = ", ".join(os.path.basename(s) for s in rag_result["sources"])
+            return _resp(f"{rag_result['answer']}\n\n*Sources: {sources_list}*")
         try:
-            return _browse_and_answer(message, use_autonomous_browser=autonomous_browser)
+            return _browse_and_answer(message, use_autonomous_browser=False)
         except Exception as exc:
             logger.warning(f"Browse failed for knowledge question: {exc}")
-            return _answer_with_llm(message)
+            return _answer_with_llm(message, model=_voice_model)
 
     # System check questions (e.g. "what is the server uptime") — map to commands
-    if mentions_system_check and not has_shell_command and not is_command_request:
+    # Also handles "check ..." requests that mention system keywords (is_command_request may be True)
+    if mentions_system_check and not has_shell_command:
         _system_keyword_commands = {
             "uptime": "uptime",
             "disk": "df -h",
@@ -1342,12 +1714,13 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
             "port": "ss -tlnp",
             "network": "ss -tlnp",
             "connection": "ss -tlnp",
-            "hana status": "sapcontrol -nr 00 -function GetProcessList",
-            "instance": "sapcontrol -nr 00 -function GetProcessList",
-            "backup status": "ls -ltr /hana/backup/ 2>/dev/null || echo 'Backup dir not found'",
+            "hana status": f"sapcontrol -nr {_inst_nr} -function GetProcessList",
+            "instance": f"sapcontrol -nr {_inst_nr} -function GetProcessList",
+            "backup status": f"sapcontrol -nr {_inst_nr} -function GetProcessList",
             "usage": "df -h; free -h",
-            "service": "sapcontrol -nr 00 -function GetProcessList",
+            "service": f"sapcontrol -nr {_inst_nr} -function GetProcessList",
             "restart": "uptime",
+            "snapshot": f"sapcontrol -nr {_inst_nr} -function GetProcessList",
         }
         sys_command = None
         for kw, cmd in _system_keyword_commands.items():
@@ -1356,7 +1729,7 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
                 logger.info(f"Non-admin system keyword: '{kw}' → {cmd}")
                 break
         if not sys_command:
-            sys_command = _extract_command_with_llm(message)
+            sys_command = _extract_command_with_llm(original_message, model=_voice_model)
         if sys_command:
             if not _is_read_only(sys_command):
                 return _reject_write(sys_command)
@@ -1367,7 +1740,7 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
                     output = result.get("output", "").strip()
                     if output:
                         if voice_mode:
-                            summary = _summarize_output_for_voice(sys_command, output)
+                            summary = _summarize_output_for_voice(sys_command, output, model=_voice_model)
                             if summary:
                                 return _resp(summary)
                             return _resp(f"Ran {sys_command}. Result: {output[:500]}")
@@ -1376,63 +1749,131 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
                     return _resp(msg)
                 else:
                     error = result.get("error", "") or result.get("output", "")
+                    if _is_remote_forbidden(result):
+                        return _reject_write(sys_command)
                     if voice_mode:
                         return _resp(f"The command {sys_command} failed. Error: {error[:300]}")
                     return _resp(f"**Command:** `{sys_command}`\n\n**Error:**\n```\n{error}\n```")
 
     if is_command_request or has_shell_command:
-        command = _extract_command_heuristic(message, msg_lower)
+        command = _extract_command_heuristic(original_message, msg_lower)
 
-        if not _is_read_only(command):
-            return _reject_write(command)
-
-        # Execute the command
-        executor = get_http_executor()
-        if not executor.is_configured():
-            return _resp("Error: Remote execution server not configured. Check REMOTE_EXEC_URL and REMOTE_EXEC_API_KEY in .env")
-
-        # Determine if it's a HANA command or regular shell command
-        hana_commands = ["sapcontrol", "hdb", "hdbsql", "hdbuserstore"]
-        is_hana_cmd = any(cmd in command.lower() for cmd in hana_commands)
-
-        if is_hana_cmd:
-            result = execute_hana_command(command, timeout=60)
+        # Validate the heuristic produced a real command (starts with a known binary)
+        _known_binaries = [
+            "sapcontrol", "hdbsql", "hdbuserstore", "hdb",
+            "df", "free", "ps", "ls", "cat", "uptime", "whoami", "hostname",
+            "date", "uname", "top", "tail", "head", "grep", "find", "du",
+            "systemctl", "journalctl", "echo", "pwd", "id", "mount", "lsblk",
+            "ss", "wc",
+        ]
+        cmd_first_word = command.split()[0].lower() if command.strip() else ""
+        if cmd_first_word not in _known_binaries:
+            # Not a recognisable shell command — fall through to LLM answer
+            logger.info(f"Heuristic produced non-command '{command[:60]}', falling through to LLM")
         else:
-            result = executor.execute_command(command, timeout=60, admin_override=True)
 
-        if result.get("status") == "success" or result.get("exit_code") == 0:
-            output = result.get("output", "").strip()
-            if output:
-                if voice_mode:
-                    summary = _summarize_output_for_voice(command, output)
-                    if summary:
-                        return _resp(summary)
-                    return _resp(f"Ran {command}. Result: {output[:500]}")
-                return _resp(f"**Command:** `{command}`\n\n**Output:**\n```\n{output}\n```")
+            if not _is_read_only(command):
+                return _reject_write(command)
+
+            # Execute the command
+            executor = get_http_executor()
+            if not executor.is_configured():
+                return _resp("Error: Remote execution server not configured. Check REMOTE_EXEC_URL and REMOTE_EXEC_API_KEY in .env")
+
+            # Determine if it's a HANA command or regular shell command
+            hana_commands = ["sapcontrol", "hdb", "hdbsql", "hdbuserstore"]
+            is_hana_cmd = any(cmd in command.lower() for cmd in hana_commands)
+
+            if is_hana_cmd:
+                result = execute_hana_command(command, timeout=60)
             else:
-                msg = f"Command {command} executed successfully with no output." if voice_mode else f"**Command:** `{command}`\n\nCommand executed successfully (no output)."
-                return _resp(msg)
-        else:
-            error = result.get("error", "") or result.get("output", "")
-            if voice_mode:
-                return _resp(f"The command {command} failed. Error: {error[:300]}")
-            return _resp(f"**Command:** `{command}`\n\n**Error:**\n```\n{error}\n```")
+                result = executor.execute_command(command, timeout=60, admin_override=True)
 
-    # Health/status check
+            if result.get("status") == "success" or result.get("exit_code") == 0:
+                output = result.get("output", "").strip()
+                if output:
+                    if voice_mode:
+                        summary = _summarize_output_for_voice(command, output, model=_voice_model)
+                        if summary:
+                            return _resp(summary)
+                        return _resp(f"Ran {command}. Result: {output[:500]}")
+                    return _resp(f"**Command:** `{command}`\n\n**Output:**\n```\n{output}\n```")
+                else:
+                    msg = f"Command {command} executed successfully with no output." if voice_mode else f"**Command:** `{command}`\n\nCommand executed successfully (no output)."
+                    return _resp(msg)
+            else:
+                error = result.get("error", "") or result.get("output", "")
+                if _is_remote_forbidden(result):
+                    return _reject_write(command)
+                if voice_mode:
+                    return _resp(f"The command {command} failed. Error: {error[:300]}")
+                return _resp(f"**Command:** `{command}`\n\n**Error:**\n```\n{error}\n```")
+
+    # Health/status check — return actual HANA service + connection info
     if "health" in msg_lower or "status" in msg_lower:
         try:
             conn = check_hana_connection()
-            return _resp(f"System health check completed. Database status: {conn.get('status', 'unknown')}")
+            conn_str = f"Database: **{conn.get('database', '?')}** — Status: **{conn.get('status', 'unknown')}** — Version: {conn.get('version', '?')}"
+            from .tools.hana_tools import query_hana as _qh_health
+            svc = _qh_health("SELECT SERVICE_NAME, ACTIVE_STATUS, SQL_PORT FROM M_SERVICES ORDER BY SERVICE_NAME")
+            if svc.get("status") == "success" and svc.get("rows"):
+                rows = svc["rows"]
+                if isinstance(rows[0], dict):
+                    headers = list(rows[0].keys())
+                    tbl = "| " + " | ".join(headers) + " |\n"
+                    tbl += "| " + " | ".join("---" for _ in headers) + " |\n"
+                    for r in rows:
+                        tbl += "| " + " | ".join(str(r.get(h, "")) for h in headers) + " |\n"
+                else:
+                    tbl = "\n".join(str(r) for r in rows)
+                return _resp(f"**System Health**\n\n{conn_str}\n\n**Services:**\n{tbl}")
+            return _resp(f"**System Health**\n\n{conn_str}")
         except Exception as e:
-            return _resp(f"I can help you check system health. Error: {str(e)}")
+            return _resp(f"Health check error: {str(e)}")
 
-    # Backup inquiries
+    # Backup inquiries — query the actual backup catalog
     elif "backup" in msg_lower:
-        return _resp("I can assist with backup operations. What would you like to know about backups?")
+        from .tools.hana_tools import query_hana as _qh_backup
+        bk = _qh_backup(
+            "SELECT TOP 5 BACKUP_ID, ENTRY_TYPE_NAME, STATE_NAME, "
+            "SYS_START_TIME, SYS_END_TIME, MESSAGE "
+            "FROM M_BACKUP_CATALOG ORDER BY SYS_END_TIME DESC"
+        )
+        if bk.get("status") == "success" and bk.get("rows"):
+            rows = bk["rows"]
+            if isinstance(rows[0], dict):
+                headers = list(rows[0].keys())
+                tbl = "| " + " | ".join(headers) + " |\n"
+                tbl += "| " + " | ".join("---" for _ in headers) + " |\n"
+                for r in rows:
+                    tbl += "| " + " | ".join(str(r.get(h, "")) for h in headers) + " |\n"
+            else:
+                tbl = "\n".join(str(r) for r in rows)
+            return _resp(f"**HANA Backup Catalog (Recent)**\n\n{tbl}")
+        err = bk.get("error_message", "Could not reach HANA")
+        return _resp(f"Backup catalog query failed: {err}. Check HANA connectivity.")
 
-    # SQL/query help
+    # SQL/query help — show top expensive queries by default
     elif "sql" in msg_lower or "query" in msg_lower:
-        return _resp("I can help optimize SQL queries. Please share the query you'd like me to analyze.")
+        from .tools.hana_tools import query_hana as _qh_sql
+        sq = _qh_sql(
+            "SELECT TOP 10 SUBSTR(STATEMENT_STRING, 1, 100) AS QUERY, "
+            "EXECUTION_COUNT, ROUND(TOTAL_EXECUTION_TIME/1000000, 2) AS TOTAL_SEC, "
+            "ROUND(AVG_EXECUTION_TIME/1000, 2) AS AVG_MS "
+            "FROM M_SQL_PLAN_CACHE ORDER BY TOTAL_EXECUTION_TIME DESC"
+        )
+        if sq.get("status") == "success" and sq.get("rows"):
+            rows = sq["rows"]
+            if isinstance(rows[0], dict):
+                headers = list(rows[0].keys())
+                tbl = "| " + " | ".join(headers) + " |\n"
+                tbl += "| " + " | ".join("---" for _ in headers) + " |\n"
+                for r in rows:
+                    tbl += "| " + " | ".join(str(r.get(h, "")) for h in headers) + " |\n"
+            else:
+                tbl = "\n".join(str(r) for r in rows)
+            return _resp(f"**Top Expensive SQL Queries**\n\n{tbl}\n\nShare a specific query for detailed analysis.")
+        return _resp("I can help optimize SQL queries. Share a query or ask about specific optimization topics.")
 
     # Diagnostics
     elif "diagnostic" in msg_lower or "diagnose" in msg_lower:
@@ -1444,17 +1885,17 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
         except Exception as e:
             return _resp(f"Error running diagnostics: {str(e)}")
 
-    # Explicit browser request (use_browser or autonomous_browser flags)
-    elif use_browser or autonomous_browser:
+    # Explicit browser request (use_browser flag — autonomous already handled above)
+    elif use_browser:
         try:
-            return _browse_and_answer(message, use_autonomous_browser=autonomous_browser)
+            return _browse_and_answer(message, use_autonomous_browser=False)
         except Exception as exc:
             logger.warning(f"Browse failed: {exc}")
-            return _answer_with_llm(message)
+            return _answer_with_llm(message, model=_voice_model)
 
     # Last resort: try LLM-based command extraction before giving up
     else:
-        llm_command = _extract_command_with_llm(message)
+        llm_command = _extract_command_with_llm(original_message, model=_voice_model)
         if llm_command:
             if not _is_read_only(llm_command):
                 return _reject_write(llm_command)
@@ -1465,7 +1906,7 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
                     output = result.get("output", "").strip()
                     if output:
                         if voice_mode:
-                            summary = _summarize_output_for_voice(llm_command, output)
+                            summary = _summarize_output_for_voice(llm_command, output, model=_voice_model)
                             if summary:
                                 return _resp(summary)
                             return _resp(f"Ran {llm_command}. Result: {output[:500]}")
@@ -1474,16 +1915,18 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
                     return _resp(msg)
                 else:
                     error = result.get("error", "") or result.get("output", "")
+                    if _is_remote_forbidden(result):
+                        return _reject_write(llm_command)
                     if voice_mode:
                         return _resp(f"The command {llm_command} failed. Error: {error[:300]}")
                     return _resp(f"**Command:** `{llm_command}`\n\n**Error:**\n```\n{error}\n```")
 
         # Try answering as a general question via LLM before showing welcome
-        llm_answer = _answer_with_llm(message)
+        llm_answer = _answer_with_llm(message, model=_voice_model)
         if llm_answer.get("response") and "couldn't retrieve" not in llm_answer["response"]:
             return llm_answer
 
-        return _resp("""I'm the HANA Sentinel AI assistant. I can help with:\n\n• **Run commands**: "run uptime", "execute df -h", "run sapcontrol -nr 00 -function GetProcessList"\n• **System health**: "check health", "show status"\n• **Diagnostics**: "run diagnostics"\n• **Backups**: "check backup status"\n• **SQL optimization**: Share a query and ask me to analyze it\n• **Browse SAP docs**: "what is ...", "how to ...", "explain ..."\n\nWhat would you like help with?""")
+        return _resp(f"""I'm the HANA Ops Agent AI assistant. I can help with:\n\n• **Run commands**: "run uptime", "execute df -h", "run sapcontrol -nr {_inst_nr} -function GetProcessList"\n• **System health**: "check health", "show status"\n• **Diagnostics**: "run diagnostics"\n• **Backups**: "check backup status"\n• **SQL optimization**: Share a query and ask me to analyze it\n• **Browse SAP docs**: "what is ...", "how to ...", "explain ..."\n\nWhat would you like help with?""")
 
 
 # ──────────────────────────────────────────────
@@ -1493,6 +1936,7 @@ def generate_agent_response(message: str, admin_mode: bool = False, use_browser:
 _cached_metrics = None
 _metrics_lock = threading.Lock()
 _metrics_refresh_thread = None
+_startup_reconnect_done = False
 
 
 def _refresh_metrics_background():
@@ -1524,7 +1968,6 @@ def _refresh_metrics_background():
         "cache_hit_ratio": None,
         "active_threads": None,
         "blocking_sessions": None,
-        "risk_budget": _risk_budgets.get(sid, RiskBudget(system_id=sid)).model_dump() if sid else {},
     }
 
     if db_connected:
@@ -1556,6 +1999,19 @@ def _refresh_metrics_background():
         _cached_metrics = metrics
 
 
+def _ensure_metrics_refresh():
+    """Start a background metrics refresh if one isn't already running."""
+    global _metrics_refresh_thread
+    if _metrics_refresh_thread is None or not _metrics_refresh_thread.is_alive():
+        _metrics_refresh_thread = threading.Thread(target=_refresh_metrics_background, daemon=True)
+        _metrics_refresh_thread.start()
+
+
+# Pre-warm: kick off the first metrics refresh immediately on import
+# so the cache is populated before the first frontend poll arrives.
+_ensure_metrics_refresh()
+
+
 @app.get("/api/v1/metrics/realtime")
 def get_realtime_metrics():
     """Get real-time system metrics. Returns cached metrics instantly,
@@ -1563,9 +2019,7 @@ def get_realtime_metrics():
     global _metrics_refresh_thread
 
     # Kick off background refresh if not already running
-    if _metrics_refresh_thread is None or not _metrics_refresh_thread.is_alive():
-        _metrics_refresh_thread = threading.Thread(target=_refresh_metrics_background, daemon=True)
-        _metrics_refresh_thread.start()
+    _ensure_metrics_refresh()
 
     # Return cached metrics immediately (or default if first call)
     with _metrics_lock:
@@ -1588,7 +2042,6 @@ def get_realtime_metrics():
         "cache_hit_ratio": None,
         "active_threads": None,
         "blocking_sessions": None,
-        "risk_budget": _risk_budgets.get(sid, RiskBudget(system_id=sid)).model_dump() if sid else {},
     }
 
 
@@ -1677,9 +2130,9 @@ def get_top_queries():
                     mem_mb = 0
                 queries.append({
                     "id": idx,
-                    "query": stmt[:80] + "..." if len(stmt) > 80 else stmt,
+                    "query": stmt,
                     "duration": duration_sec,
-                    "calls": mem_mb,
+                    "memory_mb": mem_mb,
                 })
             return {"status": "success", "queries": queries}
     except Exception as e:
@@ -1725,7 +2178,7 @@ def get_active_transactions():
                     "start_time": str(row.get("START_TIME", "")),
                     "connection_id": row.get("CONNECTION_ID"),
                     "client_ip": row.get("CLIENT_IP", ""),
-                    "sql": stmt[:120] + "..." if len(stmt) > 120 else stmt,
+                    "sql": stmt,
                     "stmt_duration_sec": row.get("STMT_DURATION_SEC", 0),
                 })
             return {
@@ -1781,17 +2234,6 @@ def get_recent_activities(limit: int = 20):
     """Get recent system activities for live feed."""
     activities = []
 
-    # Add incidents
-    for incident_id, incident in list(_incidents.items())[:5]:
-        activities.append({
-            "id": incident_id,
-            "type": "incident",
-            "severity": "error" if incident.severity > 3 else "warning",
-            "message": f"Incident detected: {incident.description or 'System anomaly'}",
-            "timestamp": incident.audit_trail[0]["timestamp"] if incident.audit_trail else datetime.utcnow().isoformat(),
-            "agent": incident.audit_trail[0].get("detected_by", "system") if incident.audit_trail else "system"
-        })
-
     # Add certificate approvals
     for cert in list(_certificates.values())[:5]:
         activities.append({
@@ -1833,6 +2275,438 @@ class InstanceHealingApproval(BaseModel):
     notes: Optional[str] = ""
 
 
+# ──────────────────────────────────────────────
+# Diagnostic → Healing auto-generation pipeline
+# ──────────────────────────────────────────────
+
+DIAGNOSTIC_TO_HEALING_MAP = {
+    "userstore": {
+        "script": "auto_db_userstoremanagement",
+        "triggers": ["warning", "critical", "error"],
+        "sap_notes": ["1792209"],
+        "description": "Userstore connectivity issues detected",
+    },
+    "disk_usage": {
+        "script": "auto_db_metadata",
+        "triggers": ["critical"],
+        "parameters": {"issues": ["backup_paths"]},
+        "sap_notes": ["2399979"],
+        "description": "Disk usage critical — backup path optimisation needed",
+    },
+    "memory_usage": {
+        "script": "auto_db_dbintegrations",
+        "triggers": ["critical"],
+        "parameters": {"parameters": ["swappiness"]},
+        "sap_notes": ["2131662"],
+        "description": "Memory pressure detected — OS tuning required",
+    },
+    "backup_status": {
+        "script": "auto_db_eligibility",
+        "triggers": ["warning", "critical"],
+        "sap_notes": ["1642148"],
+        "description": "Backup validation issues detected",
+    },
+    "system_parameters": {
+        "script": "auto_db_metadata",
+        "triggers": ["warning", "critical"],
+        "parameters": {"issues": ["db_parameters"]},
+        "sap_notes": ["2222200"],
+        "description": "System parameters outside recommended range",
+    },
+    "trace_directory": {
+        "script": "auto_db_metadata",
+        "triggers": ["warning", "critical"],
+        "parameters": {"issues": ["trace_permissions"]},
+        "sap_notes": ["2380176"],
+        "description": "Trace directory issues detected",
+    },
+    "process_status": {
+        "script": "auto_db_dbintegrations",
+        "triggers": ["critical"],
+        "sap_notes": ["2177064"],
+        "description": "HANA process failures — OS integration check needed",
+    },
+    "database_alerts": {
+        "script": "auto_db_metadata",
+        "triggers": ["critical"],
+        "sap_notes": ["2147247"],
+        "description": "Database alerts require metadata review",
+    },
+}
+
+
+def _enrich_with_llm(check_name: str, check_data: dict, script_name: str, diagnostic_result: dict) -> Optional[dict]:
+    """Call AI Core LLM to generate detailed analysis for a healing proposal."""
+    try:
+        from .aicore_client import AICoreiClient
+        client = AICoreiClient()
+        if not client.is_configured():
+            return None
+
+        prompt = (
+            "Analyze this SAP HANA diagnostic finding and provide a healing recommendation.\n\n"
+            f"Diagnostic Check: {check_name}\n"
+            f"Severity: {check_data.get('severity', 'unknown')}\n"
+            f"Message: {check_data.get('message', 'N/A')}\n"
+            f"Error: {check_data.get('error', 'N/A')}\n"
+            f"Proposed Healing Script: {script_name}\n"
+            f"Instance: {diagnostic_result.get('instance_name', '')}\n"
+            f"SID: {diagnostic_result.get('sid', '')}\n\n"
+            "Respond ONLY with JSON (no markdown):\n"
+            '{"root_cause":"...","impact":"...","healing_steps":["..."],'
+            '"expected_outcome":"...","risk_assessment":"...",'
+            '"estimated_downtime":"None|Minimal|Minutes|Requires restart",'
+            '"sap_recommendation":"..."}'
+        )
+        raw = client.generate_text(
+            prompt=prompt,
+            system_prompt="You are an SAP HANA database expert. Be concise and actionable.",
+            temperature=0.3,
+            max_tokens=1024,
+        )
+        # Parse JSON from response
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start >= 0 and end > start:
+            return json.loads(raw[start:end])
+        return {"raw_analysis": raw}
+    except Exception as exc:
+        logger.warning(f"LLM enrichment failed for {check_name}: {exc}")
+        return None
+
+
+def _verify_with_browser(script_name: str, sap_notes: list) -> dict:
+    """Use browser-use to verify healing commands against SAP documentation."""
+    try:
+        from .agent import browser_navigate
+
+        search_topics = {
+            "auto_db_userstoremanagement": "HANA userstore configuration hdbuserstore best practice",
+            "auto_db_metadata": "HANA backup path configuration global.ini trace permissions",
+            "auto_db_dbintegrations": "HANA OS parameters swappiness THP ASLR SAP recommended",
+            "auto_db_eligibility": "HANA backup catalog validation eligibility checks",
+        }
+        topic = search_topics.get(script_name, script_name)
+        url = (
+            f"https://me.sap.com/notes/{sap_notes[0]}"
+            if sap_notes
+            else f"https://me.sap.com/search?query={topic}"
+        )
+        result = browser_navigate(
+            url=url,
+            task_description=(
+                f"Find SAP recommendations about {topic}. "
+                "Extract the key recommended steps, parameter values, and any warnings."
+            ),
+        )
+        if result.get("status") == "success":
+            return {
+                "verified": True,
+                "source_url": url,
+                "sap_guidance": result.get("extracted_data", ""),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        return {
+            "verified": False,
+            "error": result.get("error_message", "Verification failed"),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as exc:
+        logger.warning(f"Browser verification failed for {script_name}: {exc}")
+        return {"verified": False, "error": str(exc), "timestamp": datetime.utcnow().isoformat()}
+
+
+# ──────────────────────────────────────────────
+# Restricted command approval pipeline
+# ──────────────────────────────────────────────
+
+def _enrich_restricted_command_llm(command: str) -> Optional[dict]:
+    """Use LLM to explain what a restricted command does and assess its risk."""
+    try:
+        from .aicore_client import AICoreiClient
+        client = AICoreiClient()
+        if not client.is_configured():
+            return None
+
+        prompt = (
+            "A user attempted to execute the following command on an SAP HANA production system, "
+            "but it was blocked by the safety filter.\n\n"
+            f"Command: {command}\n\n"
+            "Analyse this command and respond ONLY with JSON (no markdown):\n"
+            '{"purpose":"what the command does in 1-2 sentences",'
+            '"risk_assessment":"why this command is dangerous on a production HANA system",'
+            '"impact":"potential impact if executed incorrectly",'
+            '"preconditions":["checks to perform before running"],'
+            '"sap_recommendation":"SAP best practice guidance for this operation",'
+            '"estimated_downtime":"None|Minimal|Minutes|Requires restart",'
+            '"safe_alternative":"a safer read-only alternative if available, or null",'
+            '"relevant_sap_notes":["SAP Note numbers if applicable"]}'
+        )
+        raw = client.generate_text(
+            prompt=prompt,
+            system_prompt="You are an SAP HANA database and Linux administration expert. Be concise and actionable.",
+            temperature=0.3,
+            max_tokens=1024,
+        )
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start >= 0 and end > start:
+            return json.loads(raw[start:end])
+        return {"raw_analysis": raw}
+    except Exception as exc:
+        logger.warning(f"LLM enrichment failed for restricted command: {exc}")
+        return None
+
+
+def _research_restricted_command_browser(command: str) -> dict:
+    """Use browser-use to research a restricted command against SAP documentation."""
+    try:
+        from .agent import browser_navigate
+
+        # Extract the primary command name for search
+        cmd_parts = command.strip().split()
+        primary_cmd = cmd_parts[0] if cmd_parts else command
+        search_query = f"SAP HANA {primary_cmd} command best practice"
+
+        url = f"https://me.sap.com/search?query={search_query}"
+        result = browser_navigate(
+            url=url,
+            task_description=(
+                f"Find SAP documentation about the command '{command}'. "
+                "Look for SAP Notes, KBA articles, or official guidance about when "
+                "and how to safely use this command on SAP HANA systems. "
+                "Extract the SAP Note number, URL, and key recommendations."
+            ),
+        )
+        if result.get("status") == "success":
+            return {
+                "verified": True,
+                "source_url": url,
+                "sap_guidance": result.get("extracted_data", ""),
+                "sources": result.get("sources", []),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        return {
+            "verified": False,
+            "error": result.get("error_message", "Research failed"),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as exc:
+        logger.warning(f"Browser research failed for restricted command: {exc}")
+        return {"verified": False, "error": str(exc), "timestamp": datetime.utcnow().isoformat()}
+
+
+async def _queue_restricted_command(command: str, source: str = "chat", user_request: str = ""):
+    """Queue a restricted command for approval with LLM + browser enrichment."""
+    try:
+        # LLM enrichment (run in thread)
+        llm_analysis = await asyncio.to_thread(_enrich_restricted_command_llm, command)
+
+        # Browser research (best-effort, timeout 90s)
+        browser_result: Optional[dict] = None
+        try:
+            browser_result = await asyncio.wait_for(
+                asyncio.to_thread(_research_restricted_command_browser, command),
+                timeout=90,
+            )
+        except (asyncio.TimeoutError, Exception) as exc:
+            logger.warning(f"Browser research skipped for restricted command: {exc}")
+            browser_result = {"verified": False, "error": "Research timed out or failed"}
+
+        # Extract SAP notes from LLM analysis
+        sap_notes = []
+        if llm_analysis and isinstance(llm_analysis.get("relevant_sap_notes"), list):
+            sap_notes = [str(n) for n in llm_analysis["relevant_sap_notes"] if n]
+
+        # Create ActionCertificate
+        cert = ActionCertificate(
+            action_type="restricted_command",
+            action_description=f"Restricted command execution: {command}",
+            target_component=os.getenv("GCP_TOOLKIT_INSTANCE_NAME", ""),
+            created_by_agent="supervisor",
+            supporting_evidence=[
+                f"Command: {command}",
+                f"Source: {source}",
+                f"Blocked by: safety filter (_is_read_only)",
+            ],
+            rollback_steps=[
+                "Verify system state before execution",
+                "Command may not be reversible — review carefully",
+            ],
+        )
+        cert.likelihood = 3
+        cert.impact = 3
+        cert.compute_dynamic_risk()
+
+        sid = os.getenv("GCP_TOOLKIT_HANA_SID", os.getenv("HANA_SID", ""))
+        budget = _risk_budgets.get(sid)
+        if not budget:
+            budget = RiskBudget(system_id=sid)
+            _risk_budgets[sid] = budget
+
+        decision = PolicyEngine.evaluate(cert, budget)
+        cert.status = "pending"
+        _certificates[cert.certificate_id] = cert
+
+        proposal_data = {
+            "certificate_id": cert.certificate_id,
+            "proposal_type": "restricted_command",
+            "command": command,
+            "source": source,
+            "user_request": user_request or command,
+            "status": "pending_approval",
+            "risk_score": cert.risk_score,
+            "created_at": datetime.utcnow().isoformat(),
+            "llm_analysis": llm_analysis,
+            "browser_verification": browser_result,
+            "sap_notes": sap_notes,
+            "execution_output": None,
+            "executed_at": None,
+            "approved_by": None,
+            "approval_notes": None,
+        }
+        _restricted_command_approvals[cert.certificate_id] = proposal_data
+
+        # Broadcast approval_required
+        await manager.broadcast({
+            "type": "approval_required",
+            "timestamp": datetime.utcnow().isoformat(),
+            "agent": "supervisor",
+            "data": {
+                "certificate_id": cert.certificate_id,
+                "proposal_type": "restricted_command",
+                "command": command,
+                "risk_score": cert.risk_score,
+            },
+        })
+        logger.info(f"Restricted command queued for approval: {command[:80]} (cert={cert.certificate_id[:8]})")
+    except Exception as exc:
+        logger.error(f"Failed to queue restricted command for approval: {exc}")
+
+
+async def _auto_generate_healing_proposals(diagnostic_id: str, diagnostic_result: dict):
+    """Analyse diagnostic output → create healing proposals with LLM + browser enrichment."""
+    checks = diagnostic_result.get("checks", {})
+    proposals_created = []
+    scripts_proposed: Dict[str, dict] = {}  # script_name → merged parameters
+
+    # Phase 1: Map issues to healing scripts (deduplicate by script)
+    for check_name, check_data in checks.items():
+        severity = check_data.get("severity", "ok")
+        mapping = DIAGNOSTIC_TO_HEALING_MAP.get(check_name)
+        if not mapping or severity not in mapping["triggers"]:
+            continue
+        script = mapping["script"]
+        if script not in scripts_proposed:
+            scripts_proposed[script] = {
+                "checks": [],
+                "parameters": {},
+                "sap_notes": [],
+                "descriptions": [],
+            }
+        entry = scripts_proposed[script]
+        entry["checks"].append((check_name, check_data))
+        entry["descriptions"].append(f"{mapping['description']} — {check_data.get('message', check_name)}")
+        # Merge parameters
+        for k, v in mapping.get("parameters", {}).items():
+            existing = entry["parameters"].setdefault(k, [])
+            if isinstance(v, list):
+                existing.extend(x for x in v if x not in existing)
+        # Merge SAP notes
+        for note in mapping.get("sap_notes", []):
+            if note not in entry["sap_notes"]:
+                entry["sap_notes"].append(note)
+
+    if not scripts_proposed:
+        logger.info("No healing proposals needed — all checks passed")
+        return []
+
+    # Phase 2: For each healing script, enrich with LLM + browser then create proposal
+    for script_name, entry in scripts_proposed.items():
+        issue_desc = "; ".join(entry["descriptions"])
+        primary_check_name, primary_check_data = entry["checks"][0]
+
+        # LLM enrichment (run in thread to avoid blocking event loop)
+        llm_analysis = await asyncio.to_thread(
+            _enrich_with_llm, primary_check_name, primary_check_data, script_name, diagnostic_result
+        )
+
+        # Browser verification (best-effort, timeout 90s)
+        browser_result: Optional[dict] = None
+        try:
+            browser_result = await asyncio.wait_for(
+                asyncio.to_thread(_verify_with_browser, script_name, entry["sap_notes"]),
+                timeout=90,
+            )
+        except (asyncio.TimeoutError, Exception) as exc:
+            logger.warning(f"Browser verification skipped for {script_name}: {exc}")
+            browser_result = {"verified": False, "error": "Verification timed out or failed"}
+
+        # Create ActionCertificate + proposal (same logic as manual propose)
+        cert = ActionCertificate(
+            action_type=f"instance_healing_{script_name}",
+            action_description=issue_desc,
+            target_component=os.getenv("GCP_TOOLKIT_INSTANCE_NAME", ""),
+            created_by_agent="instance_healing_agent",
+            supporting_evidence=[
+                f"Diagnostic ID: {diagnostic_id}",
+                f"Checks: {', '.join(c[0] for c in entry['checks'])}",
+                f"Severities: {', '.join(c[1].get('severity', '?') for c in entry['checks'])}",
+            ],
+            rollback_steps=[
+                "Verify current state before execution",
+                "Document changes made",
+                "Execute rollback script if needed",
+            ],
+        )
+        cert.compute_dynamic_risk()
+
+        sid = os.getenv("GCP_TOOLKIT_HANA_SID", os.getenv("HANA_SID", ""))
+        budget = _risk_budgets.get(sid)
+        if not budget:
+            budget = RiskBudget(system_id=sid)
+            _risk_budgets[sid] = budget
+
+        decision = PolicyEngine.evaluate(cert, budget)
+        can_proceed = decision["decision"] in ("APPROVED", "NEEDS_APPROVAL")
+        cert.status = "pending" if can_proceed else "rejected"
+        _certificates[cert.certificate_id] = cert
+
+        proposal_data = {
+            "certificate_id": cert.certificate_id,
+            "diagnostic_id": diagnostic_id,
+            "script_name": script_name,
+            "parameters": entry["parameters"],
+            "status": "pending_approval" if can_proceed else "rejected",
+            "risk_score": cert.risk_score,
+            "created_at": datetime.utcnow().isoformat(),
+            "issue_description": issue_desc,
+            "llm_analysis": llm_analysis,
+            "browser_verification": browser_result,
+            "sap_notes": entry["sap_notes"],
+            "auto_generated": True,
+        }
+        _instance_healing_proposals[cert.certificate_id] = proposal_data
+        proposals_created.append(proposal_data)
+
+        # Broadcast approval_required
+        await manager.broadcast({
+            "type": "approval_required",
+            "timestamp": datetime.utcnow().isoformat(),
+            "agent": "instance_healing_agent",
+            "data": {
+                "certificate_id": cert.certificate_id,
+                "script_name": script_name,
+                "risk_score": cert.risk_score,
+                "issue": issue_desc,
+                "auto_generated": True,
+            },
+        })
+
+    logger.info(f"Auto-generated {len(proposals_created)} healing proposals for diagnostic {diagnostic_id}")
+    return proposals_created
+
+
 @app.post("/api/v1/instance/diagnostics")
 async def run_instance_diagnostics(req: InstanceDiagnosticRequest):
     """Run diagnostic check on vlgdbzo3 instance."""
@@ -1846,15 +2720,19 @@ async def run_instance_diagnostics(req: InstanceDiagnosticRequest):
         })
 
         # Run diagnostic
-        result = run_instance_diagnostic(
+        result = await asyncio.to_thread(
+            run_instance_diagnostic,
             instance_name=req.instance_name,
             project_id=req.project_id,
-            zone=req.zone
+            zone=req.zone,
         )
 
         # Store result
         diagnostic_id = result.get('diagnostic_id')
+        if not diagnostic_id:
+            raise HTTPException(status_code=500, detail="Diagnostic returned no ID")
         _instance_diagnostics[diagnostic_id] = result
+        _save_diagnostic_history()
 
         # Log
         logger = get_instance_logger()
@@ -1872,10 +2750,30 @@ async def run_instance_diagnostics(req: InstanceDiagnosticRequest):
             }
         })
 
+        # Auto-generate healing proposals for any detected issues
+        healing_proposals = []
+        if result.get('issue_count', 0) > 0:
+            try:
+                healing_proposals = await _auto_generate_healing_proposals(diagnostic_id, result)
+            except Exception as heal_exc:
+                logger.warning(f"Auto-healing generation failed (non-fatal): {heal_exc}")
+
         return {
             "status": "success",
             "diagnostic_id": diagnostic_id,
-            "result": result
+            "result": result,
+            "healing_proposals": [
+                {
+                    "certificate_id": p["certificate_id"],
+                    "script_name": p["script_name"],
+                    "issue_description": p["issue_description"],
+                    "risk_score": p["risk_score"],
+                    "llm_analysis": p.get("llm_analysis"),
+                    "browser_verification": p.get("browser_verification"),
+                    "sap_notes": p.get("sap_notes", []),
+                }
+                for p in healing_proposals
+            ],
         }
 
     except Exception as e:
@@ -1886,6 +2784,30 @@ async def run_instance_diagnostics(req: InstanceDiagnosticRequest):
             "data": {"error": str(e)}
         })
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/instance/diagnostics/history")
+def get_diagnostic_history():
+    """Get summary list of all diagnostics, newest first."""
+    summaries = []
+    for diag in _instance_diagnostics.values():
+        issue_count = diag.get('issue_count', 0)
+        checks = diag.get('checks', {})
+        severity_counts = {}
+        for c in checks.values():
+            sev = c.get('severity', 'info')
+            severity_counts[sev] = severity_counts.get(sev, 0) + 1
+        summaries.append({
+            "diagnostic_id": diag.get('diagnostic_id', ''),
+            "timestamp": diag.get('timestamp', ''),
+            "overall_status": diag.get('overall_status', 'unknown'),
+            "issue_count": issue_count,
+            "check_count": len(checks),
+            "severity_counts": severity_counts,
+            "instance_name": diag.get('instance_name', ''),
+        })
+    summaries.sort(key=lambda x: x['timestamp'], reverse=True)
+    return {"status": "success", "diagnostics": summaries}
 
 
 @app.get("/api/v1/instance/diagnostics/latest")
@@ -2014,7 +2936,7 @@ async def propose_instance_healing(proposal: InstanceHealingProposal):
         decision = PolicyEngine.evaluate(cert, budget)
         can_proceed = decision["decision"] in ("APPROVED", "NEEDS_APPROVAL")
 
-        cert.status = "pending_approval" if can_proceed else "denied"
+        cert.status = "pending" if can_proceed else "rejected"
         _certificates[cert.certificate_id] = cert
 
         # Store proposal
@@ -2023,7 +2945,7 @@ async def propose_instance_healing(proposal: InstanceHealingProposal):
             "diagnostic_id": proposal.diagnostic_id,
             "script_name": proposal.script_name,
             "parameters": proposal.parameters or {},
-            "status": cert.status,
+            "status": "pending_approval" if can_proceed else "rejected",
             "risk_score": cert.risk_score,
             "created_at": datetime.utcnow().isoformat()
         }
@@ -2046,7 +2968,7 @@ async def propose_instance_healing(proposal: InstanceHealingProposal):
             "status": "success",
             "certificate_id": cert.certificate_id,
             "can_proceed": can_proceed,
-            "reason": reason,
+            "reason": decision["reason"],
             "risk_score": cert.risk_score,
             "requires_approval": True
         }
@@ -2055,9 +2977,59 @@ async def propose_instance_healing(proposal: InstanceHealingProposal):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/v1/instance/healing/pending")
+def list_pending_approvals():
+    """List all healing proposals that are pending approval."""
+    pending = []
+    for cert_id, proposal in _instance_healing_proposals.items():
+        if proposal.get("status") == "pending_approval":
+            cert = _certificates.get(cert_id)
+            pending.append({
+                "certificate_id": cert_id,
+                "proposal_type": "healing",
+                "script_name": proposal.get("script_name", ""),
+                "issue_description": cert.action_description if cert else proposal.get("issue_description", ""),
+                "risk_score": proposal.get("risk_score", 0),
+                "parameters": proposal.get("parameters", {}),
+                "diagnostic_id": proposal.get("diagnostic_id", ""),
+                "created_at": proposal.get("created_at", ""),
+                "status": proposal["status"],
+                "llm_analysis": proposal.get("llm_analysis"),
+                "browser_verification": proposal.get("browser_verification"),
+                "sap_notes": proposal.get("sap_notes", []),
+                "auto_generated": proposal.get("auto_generated", False),
+            })
+
+    # Also include restricted command approvals (all statuses for history)
+    for cert_id, cmd_proposal in _restricted_command_approvals.items():
+        cert = _certificates.get(cert_id)
+        pending.append({
+            "certificate_id": cert_id,
+            "proposal_type": "restricted_command",
+            "command": cmd_proposal.get("command", ""),
+            "source": cmd_proposal.get("source", "chat"),
+            "user_request": cmd_proposal.get("user_request", cmd_proposal.get("command", "")),
+            "issue_description": f"Restricted command: {cmd_proposal.get('command', '')}",
+            "risk_score": cmd_proposal.get("risk_score", 0),
+            "created_at": cmd_proposal.get("created_at", ""),
+            "status": cmd_proposal["status"],
+            "llm_analysis": cmd_proposal.get("llm_analysis"),
+            "browser_verification": cmd_proposal.get("browser_verification"),
+            "sap_notes": cmd_proposal.get("sap_notes", []),
+            "execution_output": cmd_proposal.get("execution_output"),
+            "executed_at": cmd_proposal.get("executed_at"),
+            "approved_by": cmd_proposal.get("approved_by"),
+            "approval_notes": cmd_proposal.get("approval_notes"),
+        })
+
+    # Sort by created_at descending (newest first)
+    pending.sort(key=lambda p: p.get("created_at", ""), reverse=True)
+    return {"status": "success", "pending_approvals": pending}
+
+
 @app.post("/api/v1/instance/healing/{certificate_id}/approve")
 async def approve_instance_healing(certificate_id: str, approval: InstanceHealingApproval):
-    """Approve healing script execution."""
+    """Approve healing script or restricted command execution."""
     try:
         # Get certificate
         if certificate_id not in _certificates:
@@ -2065,10 +3037,38 @@ async def approve_instance_healing(certificate_id: str, approval: InstanceHealin
 
         cert = _certificates[certificate_id]
         cert.status = "approved"
+        cert.approved_by = approval.approved_by
+        cert.approved_at = datetime.utcnow()
+        cert.approval_notes = approval.notes or ""
 
-        # Get proposal
-        if certificate_id not in _instance_healing_proposals:
-            raise HTTPException(status_code=404, detail="Healing proposal not found")
+        # Determine proposal type
+        is_restricted_cmd = certificate_id in _restricted_command_approvals
+        is_healing = certificate_id in _instance_healing_proposals
+
+        if not is_restricted_cmd and not is_healing:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+
+        if is_restricted_cmd:
+            proposal = _restricted_command_approvals[certificate_id]
+            proposal["status"] = "approved"
+            proposal["approved_by"] = approval.approved_by
+            proposal["approval_notes"] = approval.notes or ""
+            await manager.broadcast({
+                "type": "healing_approved",
+                "timestamp": datetime.utcnow().isoformat(),
+                "agent": "supervisor",
+                "data": {
+                    "certificate_id": certificate_id,
+                    "approved_by": approval.approved_by,
+                    "proposal_type": "restricted_command",
+                    "command": proposal.get("command", ""),
+                },
+            })
+            return {
+                "status": "success",
+                "certificate_id": certificate_id,
+                "message": "Restricted command approved. Execute via /execute endpoint."
+            }
 
         proposal = _instance_healing_proposals[certificate_id]
 
@@ -2096,7 +3096,7 @@ async def approve_instance_healing(certificate_id: str, approval: InstanceHealin
 
 @app.post("/api/v1/instance/healing/{certificate_id}/reject")
 async def reject_instance_healing(certificate_id: str, approval: InstanceHealingApproval):
-    """Reject healing script execution."""
+    """Reject healing script or restricted command execution."""
     try:
         if certificate_id not in _certificates:
             raise HTTPException(status_code=404, detail="Certificate not found")
@@ -2104,13 +3104,19 @@ async def reject_instance_healing(certificate_id: str, approval: InstanceHealing
         cert = _certificates[certificate_id]
         cert.status = "rejected"
 
-        proposal = _instance_healing_proposals.get(certificate_id, {})
+        # Update the correct store
+        if certificate_id in _restricted_command_approvals:
+            _restricted_command_approvals[certificate_id]["status"] = "rejected"
+            _restricted_command_approvals[certificate_id]["approved_by"] = approval.approved_by
+            _restricted_command_approvals[certificate_id]["approval_notes"] = approval.notes or ""
+        elif certificate_id in _instance_healing_proposals:
+            _instance_healing_proposals[certificate_id]["status"] = "rejected"
 
         # Broadcast rejection
         await manager.broadcast({
             "type": "healing_rejected",
             "timestamp": datetime.utcnow().isoformat(),
-            "agent": "instance_healing_agent",
+            "agent": "supervisor",
             "data": {
                 "certificate_id": certificate_id,
                 "rejected_by": approval.approved_by,
@@ -2121,7 +3127,7 @@ async def reject_instance_healing(certificate_id: str, approval: InstanceHealing
         return {
             "status": "success",
             "certificate_id": certificate_id,
-            "message": "Healing script rejected."
+            "message": "Rejected."
         }
 
     except Exception as e:
@@ -2130,7 +3136,7 @@ async def reject_instance_healing(certificate_id: str, approval: InstanceHealing
 
 @app.post("/api/v1/instance/healing/{certificate_id}/execute")
 async def execute_instance_healing(certificate_id: str):
-    """Execute approved healing script."""
+    """Execute approved healing script or restricted command."""
     try:
         # Get certificate
         if certificate_id not in _certificates:
@@ -2139,9 +3145,65 @@ async def execute_instance_healing(certificate_id: str):
         cert = _certificates[certificate_id]
 
         if cert.status != "approved":
-            raise HTTPException(status_code=400, detail="Healing not approved")
+            raise HTTPException(status_code=400, detail="Not approved")
 
-        # Get proposal
+        # Determine if this is a restricted command or a healing script
+        is_restricted_cmd = certificate_id in _restricted_command_approvals
+
+        if is_restricted_cmd:
+            # ── Execute restricted command via RCE server ──
+            cmd_proposal = _restricted_command_approvals[certificate_id]
+            command = cmd_proposal["command"]
+
+            await manager.broadcast({
+                "type": "healing_executing",
+                "timestamp": datetime.utcnow().isoformat(),
+                "agent": "supervisor",
+                "data": {
+                    "certificate_id": certificate_id,
+                    "proposal_type": "restricted_command",
+                    "command": command,
+                },
+            })
+
+            # Execute via HTTP command executor (admin override)
+            from .tools import get_http_executor
+            executor = get_http_executor()
+            result = await asyncio.to_thread(
+                lambda: executor.execute_command(command, timeout=120, admin_override=True)
+            )
+
+            cmd_proposal["status"] = "executed"
+            cmd_proposal["execution_output"] = result.get("output", "")
+            cmd_proposal["executed_at"] = datetime.utcnow().isoformat()
+            cert.status = "executed"
+
+            await manager.broadcast({
+                "type": "healing_completed",
+                "timestamp": datetime.utcnow().isoformat(),
+                "agent": "supervisor",
+                "data": {
+                    "certificate_id": certificate_id,
+                    "proposal_type": "restricted_command",
+                    "status": result.get("status", "unknown"),
+                    "exit_code": result.get("exit_code"),
+                    "output": result.get("output", "")[:2000],
+                },
+            })
+
+            return {
+                "status": "success",
+                "certificate_id": certificate_id,
+                "execution_result": {
+                    "output": result.get("output", ""),
+                    "exit_code": result.get("exit_code"),
+                    "status": result.get("status", "unknown"),
+                },
+            }
+
+        # ── Execute healing script ──
+        if certificate_id not in _instance_healing_proposals:
+            raise HTTPException(status_code=404, detail="Healing proposal not found")
         proposal = _instance_healing_proposals[certificate_id]
 
         # Broadcast execution start
@@ -2156,14 +3218,15 @@ async def execute_instance_healing(certificate_id: str):
         })
 
         # Execute healing script
-        result = execute_healing_script(
+        result = await asyncio.to_thread(
+            execute_healing_script,
             script_name=proposal['script_name'],
-            parameters=proposal['parameters']
+            parameters=proposal['parameters'],
         )
 
         # Log
-        logger = get_instance_logger()
-        logger.log_healing(result, proposal['script_name'])
+        inst_logger = get_instance_logger()
+        inst_logger.log_healing(result, proposal['script_name'])
 
         # Broadcast progress
         await manager.broadcast({
@@ -2178,12 +3241,17 @@ async def execute_instance_healing(certificate_id: str):
         })
 
         # Verify
-        verification = verify_healing_execution(proposal['script_name'], result)
-        logger.log_verification(verification, proposal['script_name'])
+        verification = await asyncio.to_thread(
+            verify_healing_execution, proposal['script_name'], result
+        )
+        inst_logger.log_verification(verification, proposal['script_name'])
 
         # Deduct risk budget
         sid = os.getenv("GCP_TOOLKIT_HANA_SID", os.getenv("HANA_SID", ""))
-        budget = _risk_budgets[sid]
+        budget = _risk_budgets.get(sid)
+        if not budget:
+            budget = RiskBudget(system_id=sid)
+            _risk_budgets[sid] = budget
         budget.deduct(cert.action_type, cert.created_by_agent)
 
         # Broadcast completion
@@ -2222,13 +3290,30 @@ async def execute_instance_healing(certificate_id: str):
 def get_instance_status():
     """Get current instance status."""
     sid = os.getenv("GCP_TOOLKIT_HANA_SID", os.getenv("HANA_SID", ""))
+    instance_name = (
+        os.getenv("GCP_TOOLKIT_INSTANCE_NAME")
+        or os.getenv("HANA_INSTANCE_NAME")
+        or sid
+        or "vlgdbzo3"
+    )
+
+    # Get actual snapshot count from GCP
+    try:
+        snapshots = list_instance_snapshots()
+        snapshot_count = len(snapshots)
+    except Exception:
+        snapshot_count = len(_instance_snapshots)
+
     return {
-        "instance_name": os.getenv("GCP_TOOLKIT_INSTANCE_NAME", ""),
-        "project_id": os.getenv("GCP_TOOLKIT_PROJECT_ID", ""),
+        "instance_name": instance_name,
+        "project_id": os.getenv("GCP_TOOLKIT_PROJECT_ID", "sap-development"),
         "diagnostics_count": len(_instance_diagnostics),
-        "pending_approvals": len([p for p in _instance_healing_proposals.values() if p['status'] == 'pending_approval']),
-        "snapshots_count": len(_instance_snapshots),
-        "risk_budget": _risk_budgets.get(sid).model_dump() if sid in _risk_budgets else None
+        "pending_approvals": (
+            len([p for p in _instance_healing_proposals.values() if p.get('status') == 'pending_approval'])
+            + len([p for p in _restricted_command_approvals.values() if p.get('status') == 'pending_approval'])
+        ),
+        "pending_commands": len([p for p in _restricted_command_approvals.values() if p.get('status') == 'pending_approval']),
+        "snapshots_count": snapshot_count,
     }
 
 
@@ -2266,95 +3351,230 @@ async def websocket_browser_stream(websocket: WebSocket):
     conversation_id = None
 
     try:
+        # Immediate ack so client can confirm WS connection is healthy
+        await websocket.send_json({
+            "type": "status",
+            "status": "connected",
+            "message": "WebSocket connected. Waiting for browser query...",
+            "progress": 1,
+        })
+
         # Wait for initial message with conversation_id and query
-        data = await websocket.receive_text()
-        msg = json.loads(data)
+        try:
+            data = await asyncio.wait_for(websocket.receive_text(), timeout=20)
+        except asyncio.TimeoutError:
+            logger.warning("[ws/browser] Client connected but sent no init payload within 20s")
+            await websocket.send_json({
+                "type": "error",
+                "status": "error",
+                "message": "No browser query received within 20s. Please retry.",
+            })
+            await websocket.close(code=1000)
+            return
+
+        try:
+            msg = json.loads(data)
+        except Exception:
+            logger.warning("[ws/browser] Invalid init payload (not JSON)")
+            await websocket.send_json({
+                "type": "error",
+                "status": "error",
+                "message": "Invalid browser init payload. Expected JSON.",
+            })
+            await websocket.close(code=1003)
+            return
+
         conversation_id = msg.get("conversation_id", str(uuid.uuid4()))
-        query = msg.get("query", "")
+        query = str(msg.get("query", "") or "")
         use_playwright = msg.get("use_playwright", True)
+
+        if not query.strip():
+            logger.warning("[ws/browser] Empty query received for conversation %s", conversation_id)
+            await websocket.send_json({
+                "type": "error",
+                "status": "error",
+                "message": "Browser query is empty. Please ask a question first.",
+            })
+            await websocket.close(code=1000)
+            return
+
+        logger.info(
+            "[ws/browser] Init payload received: conversation_id=%s, query_len=%d, use_playwright=%s",
+            conversation_id,
+            len(query),
+            use_playwright,
+        )
 
         browser_manager.connections[conversation_id] = websocket
 
         if use_playwright:
-            # Use real Playwright browser automation
+            # Use browser-use (headful) for LLM-driven autonomous browsing.
             try:
-                from .tools.playwright_browser import browse_with_playwright, BrowserAction
+                from .agents.browser_agent import BrowserUseAgent
 
-                action_count = [0]
-
-                async def on_action(action: BrowserAction):
-                    """Stream each browser action to the WebSocket."""
-                    action_count[0] += 1
-                    total_expected = 10
-                    progress = min(95, int((action_count[0] / total_expected) * 100))
-
-                    # Send screenshot with page text and elements
-                    await websocket.send_json({
-                        "type": "action",
-                        "action_type": action.action_type,
-                        "url": action.url,
-                        "page_title": action.page_title,
-                        "description": action.description,
-                        "screenshot": action.screenshot_base64,  # Base64 screenshot
-                        "cursor_x": action.cursor_x,
-                        "cursor_y": action.cursor_y,
-                        "page_text": action.page_text[:1500] if action.page_text else "",
-                        "elements": [
-                            {
-                                "tag": e.tag,
-                                "text": e.text,
-                                "element_type": e.element_type,
-                                "href": e.href,
-                            }
-                            for e in (action.elements or [])[:15]
-                        ],
-                        "target_element": {
-                            "tag": action.target_element.tag,
-                            "text": action.target_element.text,
-                            "element_type": action.target_element.element_type,
-                        } if action.target_element else None,
-                        "target": action.target,
-                        "progress": progress,
-                        "status": "browsing",
-                        "success": action.success,
-                        "error": action.error,
-                    })
-
-                # Send starting status
                 await websocket.send_json({
                     "type": "status",
                     "status": "starting",
-                    "message": "Launching Playwright browser...",
+                    "message": "Launching browser-use agent (headful)...",
                     "progress": 0,
                 })
 
-                # Run Playwright browser
-                result = await browse_with_playwright(
-                    query=query,
-                    on_action=lambda a: asyncio.create_task(on_action(a)),
-                    headless=True,
-                    max_pages=3,
-                )
+                await websocket.send_json({
+                    "type": "action",
+                    "action_type": "navigate",
+                    "url": "about:blank",
+                    "description": f"Searching: {query[:80]}",
+                    "progress": 10,
+                    "status": "browsing",
+                    "success": True,
+                })
 
-                # Send completion
+                logger.info("[ws/browser] Starting browser-use agent (headful)")
+
+                agent = BrowserUseAgent(headless=False)
+                is_partial = False
+                visited_pages = []  # Collect {url, title} from each step
+
+                # Step callback — streams agent thoughts/scratchpad to the UI
+                async def _on_step(browser_state, agent_output, step_num):
+                    try:
+                        thought_data = {
+                            "type": "thought",
+                            "step": step_num,
+                            "url": getattr(browser_state, "url", "") or "",
+                            "title": getattr(browser_state, "title", "") or "",
+                            "thinking": getattr(agent_output, "thinking", None) or "",
+                            "evaluation": getattr(agent_output, "evaluation_previous_goal", None) or "",
+                            "memory": getattr(agent_output, "memory", None) or "",
+                            "next_goal": getattr(agent_output, "next_goal", None) or "",
+                        }
+                        # Extract action names for display
+                        actions = []
+                        for a in (getattr(agent_output, "action", None) or []):
+                            action_dict = a.model_dump() if hasattr(a, "model_dump") else {}
+                            for k, v in action_dict.items():
+                                if v is not None:
+                                    actions.append(k)
+                                    break
+                        thought_data["actions"] = actions
+
+                        # Track visited pages for sources
+                        step_url = getattr(browser_state, "url", "") or ""
+                        step_title = getattr(browser_state, "title", "") or ""
+                        if step_url and step_url != "about:blank":
+                            if not any(p["url"] == step_url for p in visited_pages):
+                                visited_pages.append({"url": step_url, "title": step_title})
+
+                        # Include screenshot if available
+                        screenshot = getattr(browser_state, "screenshot", None)
+                        if screenshot:
+                            thought_data["screenshot"] = screenshot
+
+                        await websocket.send_json(thought_data)
+                    except Exception as cb_err:
+                        logger.debug("[ws/browser] step callback send failed: %s", cb_err)
+
+                try:
+                    result_text = await asyncio.wait_for(
+                        agent.navigate_and_extract(task=query, timeout=180, step_callback=_on_step),
+                        timeout=240,
+                    )
+                except asyncio.TimeoutError:
+                    # Outer timeout — navigate_and_extract itself should have
+                    # already returned partial results in most cases, but if the
+                    # outer 240s fires we still salvage what we can.
+                    logger.warning("[ws/browser] Outer 240s timeout — extracting partial results")
+                    result_text = BrowserUseAgent._extract_partial_results(
+                        agent._get_inner_agent() if hasattr(agent, '_get_inner_agent') else None,
+                        240,
+                    )
+                    is_partial = True
+
+                # Detect partial-result marker from browser agent
+                if result_text and "**Note:** The browser agent" in result_text:
+                    is_partial = True
+
+                await websocket.send_json({
+                    "type": "action",
+                    "action_type": "extract",
+                    "url": "",
+                    "description": "Browser-use agent finished browsing" + (" (partial — timed out)" if is_partial else ""),
+                    "progress": 80,
+                    "status": "browsing",
+                    "success": True,
+                })
+
+                # LLM synthesis on the extracted content (works for both full and partial)
+                synthesized = result_text or ""
+                if result_text and not result_text.startswith("[Browser"):
+                    try:
+                        await websocket.send_json({
+                            "type": "status",
+                            "status": "synthesizing",
+                            "message": "Analyzing extracted content with AI..." + (" (from partial results)" if is_partial else ""),
+                            "progress": 95,
+                        })
+                        from .aicore_client import get_aicore_client
+                        client = get_aicore_client()
+                        if client.is_configured():
+                            partial_note = (
+                                "\n\nIMPORTANT: The browser agent timed out before completing all queries. "
+                                "Synthesize the best possible answer from what WAS collected. "
+                                "Clearly note which parts are based on partial information.\n"
+                            ) if is_partial else ""
+                            system_prompt = (
+                                "You are an SAP HANA expert assistant. Answer the user's question based ONLY on "
+                                "the documentation excerpts provided below. Cite the source URL when referencing "
+                                "specific information. If the documentation doesn't fully answer the question, "
+                                "say so and suggest where to look further.\n\n"
+                                f"Documentation excerpts:\n{result_text}"
+                                f"{partial_note}"
+                            )
+                            answer = client.generate_text(
+                                prompt=query,
+                                system_prompt=system_prompt,
+                                temperature=0.3,
+                                max_tokens=1024,
+                            )
+                            if answer:
+                                synthesized = answer.strip()
+                    except Exception as synth_exc:
+                        logger.warning(f"LLM synthesis in WS path failed: {synth_exc}")
+
+                # Build sources from visited pages
+                browse_sources = [
+                    {
+                        "url": p["url"],
+                        "title": p["title"] or p["url"],
+                        "status": "ok",
+                        "source": "browser_use",
+                    }
+                    for p in visited_pages
+                ]
+
+                # Append a Sources section to the response text so it's visible in markdown
+                if browse_sources and synthesized and not synthesized.startswith("[Browser"):
+                    source_lines = "\n".join(
+                        f"- [{s['title']}]({s['url']})" for s in browse_sources
+                    )
+                    synthesized = f"{synthesized}\n\n---\n**Sources:**\n{source_lines}"
+
                 await websocket.send_json({
                     "type": "complete",
                     "status": "complete",
                     "progress": 100,
-                    "response": result.get("response", ""),
-                    "sources": result.get("sources", []),
-                    "action_count": len(result.get("actions", [])),
+                    "response": synthesized,
+                    "sources": browse_sources,
+                    "action_count": max(1, len(visited_pages)),
+                    "is_partial": is_partial,
                 })
 
-            except ImportError:
-                logger.warning("Playwright not available, using simulation")
-                await _simulate_browser_steps(websocket, query)
-            except Exception as e:
-                logger.error(f"Playwright error: {e}")
+            except Exception as bu_exc:
+                logger.error(f"browser-use flow failed: {bu_exc}", exc_info=True)
                 await websocket.send_json({
                     "type": "error",
                     "status": "error",
-                    "message": str(e),
+                    "message": f"Browser-use failed: {bu_exc}",
                 })
         else:
             await _simulate_browser_steps(websocket, query)
@@ -2373,105 +3593,53 @@ async def websocket_browser_stream(websocket: WebSocket):
 
 
 async def _simulate_browser_steps(websocket: WebSocket, query: str):
-    """Fallback simulation when Playwright is not available."""
-    steps = [
-        {
-            "url": "about:blank",
-            "action": "Initializing browser...",
-            "progress": 5,
-            "page_text": "Browser starting up...",
-            "elements": [],
-        },
-        {
-            "url": "https://www.google.com",
-            "action": "Opening search engine...",
-            "progress": 15,
-            "page_text": "Google Search - The most comprehensive index of web pages",
-            "elements": [
-                {"tag": "input", "text": "Search", "element_type": "input"},
-                {"tag": "button", "text": "Google Search", "element_type": "button"},
-                {"tag": "button", "text": "I'm Feeling Lucky", "element_type": "button"},
-            ],
-        },
-        {
-            "url": f"https://www.google.com/search?q={query}",
-            "action": "Searching...",
-            "progress": 30,
-            "page_text": f"Search results for: {query}\n\nAbout 1,230,000 results (0.42 seconds)\n\n1. SAP Help Portal - Documentation\nhttps://help.sap.com/docs\nComprehensive documentation for SAP products...\n\n2. SAP Community\nhttps://community.sap.com\nConnect with SAP experts and users...",
-            "elements": [
-                {"tag": "a", "text": "SAP Help Portal", "element_type": "link", "href": "https://help.sap.com"},
-                {"tag": "a", "text": "SAP Community", "element_type": "link", "href": "https://community.sap.com"},
-                {"tag": "a", "text": "SAP Notes", "element_type": "link", "href": "https://me.sap.com/notes"},
-            ],
-            "target_element": {"tag": "a", "text": "SAP Help Portal", "element_type": "link"},
-        },
-        {
-            "url": "https://help.sap.com/docs",
-            "action": "Navigating to SAP docs...",
-            "progress": 45,
-            "page_text": "SAP Help Portal\n\nWelcome to the SAP Help Portal, your central access point for SAP documentation.\n\nPopular Topics:\n- SAP HANA Administration Guide\n- SAP HANA SQL Reference\n- Backup and Recovery\n- Performance Optimization",
-            "elements": [
-                {"tag": "a", "text": "SAP HANA Administration Guide", "element_type": "link"},
-                {"tag": "a", "text": "Backup and Recovery", "element_type": "link"},
-                {"tag": "button", "text": "Search Documentation", "element_type": "button"},
-            ],
-        },
-        {
-            "url": "https://me.sap.com/notes",
-            "action": "Checking SAP Notes...",
-            "progress": 60,
-            "page_text": "SAP Notes Search\n\nFind solutions and recommendations from SAP support.\n\nRecent Notes:\n- Note 2222200 - HANA Performance\n- Note 2380291 - Security Configuration\n- Note 2177064 - Backup Best Practices",
-            "elements": [
-                {"tag": "a", "text": "Note 2222200", "element_type": "link"},
-                {"tag": "a", "text": "Note 2380291", "element_type": "link"},
-                {"tag": "input", "text": "Search notes...", "element_type": "input"},
-            ],
-        },
-        {
-            "url": "https://community.sap.com",
-            "action": "Reading community posts...",
-            "progress": 75,
-            "page_text": "SAP Community\n\nAsk questions, share knowledge, and connect with experts.\n\nTrending Discussions:\n- Best practices for HANA memory management\n- Troubleshooting backup failures\n- SQL optimization techniques",
-            "elements": [
-                {"tag": "a", "text": "Ask a Question", "element_type": "link"},
-                {"tag": "a", "text": "Browse Topics", "element_type": "link"},
-            ],
-        },
-        {
-            "url": "https://help.sap.com/docs",
-            "action": "Extracting content...",
-            "progress": 85,
-            "page_text": "Extracting relevant information from visited pages...\n\nContent gathered from 3 sources:\n- SAP Help Portal\n- SAP Notes\n- SAP Community",
-            "elements": [],
-        },
-        {
-            "url": "complete",
-            "action": "Synthesizing answer...",
-            "progress": 95,
-            "page_text": "Processing extracted content with AI model...",
-            "elements": [],
-        },
-        {
-            "url": "complete",
-            "action": "Done!",
-            "progress": 100,
-            "page_text": "Answer ready.",
-            "elements": [],
-        },
-    ]
+    """Fallback when browser automation is unavailable — informs the user honestly."""
+    await websocket.send_json({
+        "type": "action",
+        "url": "",
+        "description": "Browser automation is not available",
+        "progress": 50,
+        "status": "browsing",
+        "page_text": "browser-use agent is not available or failed to initialize. Cannot perform live web browsing.",
+        "elements": [],
+    })
+    await asyncio.sleep(0.5)
 
-    for step in steps:
-        await websocket.send_json({
-            "type": "action",
-            "url": step["url"],
-            "description": step["action"],
-            "progress": step["progress"],
-            "status": "browsing" if step["progress"] < 100 else "complete",
-            "page_text": step.get("page_text", ""),
-            "elements": step.get("elements", []),
-            "target_element": step.get("target_element"),
-        })
-        await asyncio.sleep(0.8)
+    fallback_response = (
+        f"Browser automation is unavailable. I cannot browse SAP documentation for: {query}\n\n"
+        "To get live web results, ensure browser-use is installed:\n"
+        "  pip install browser-use\n\n"
+        "In the meantime, you can check these resources manually:\n"
+        "- SAP KBA: https://userapps.support.sap.com/sap/support/knowledge/en\n"
+        "- SAP Notes: https://me.sap.com/notes\n"
+        "- SAP Help: https://help.sap.com/docs/SAP_HANA_PLATFORM\n"
+        "- SAP Community: https://community.sap.com"
+    )
+
+    # Try LLM-only answer as fallback
+    try:
+        from .aicore_client import get_aicore_client
+        client = get_aicore_client()
+        if client.is_configured():
+            answer = client.generate_text(
+                prompt=query,
+                system_prompt="You are an SAP HANA expert. Answer based on your knowledge. Be honest if you are not sure.",
+                temperature=0.3,
+                max_tokens=1024,
+            )
+            if answer:
+                fallback_response = answer.strip()
+    except Exception:
+        pass
+
+    await websocket.send_json({
+        "type": "complete",
+        "status": "complete",
+        "progress": 100,
+        "response": fallback_response,
+        "sources": [],
+        "action_count": 0,
+    })
 
 
 @app.websocket("/ws/instance-status")

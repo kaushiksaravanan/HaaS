@@ -126,11 +126,10 @@ class GenericSTT(stt.STT):
         start = time.time()
         try:
             text = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: self._recognizer.recognize_google(
-                        audio_data, language=lang
-                    ),
+                asyncio.to_thread(
+                    self._recognizer.recognize_google,
+                    audio_data,
+                    language=lang,
                 ),
                 timeout=15.0,
             )

@@ -225,7 +225,7 @@ class HTTPCommandExecutor:
             response = requests.get(
                 f"{self.base_url}/operational/backup-status",
                 headers={"X-API-Key": self.api_key},
-                timeout=10
+                timeout=35
             )
 
             if response.status_code == 200:
@@ -528,7 +528,7 @@ def execute_hana_command(command: str, timeout: int = 60) -> dict:
     - Environment variables (HANA_HOME, etc.) are set in zo3adm's profile
 
     Args:
-        command: HANA command to execute (e.g., 'sapcontrol -nr 00 -function GetProcessList')
+        command: HANA command to execute (e.g., 'sapcontrol -nr 02 -function GetProcessList')
         timeout: Command timeout in seconds
 
     Returns:

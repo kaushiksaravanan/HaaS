@@ -13,7 +13,6 @@ import 'reactflow/dist/style.css'
 import {
   Zap, Activity, Send, Play, RefreshCw, MessageSquare,
   Terminal, CheckCircle, AlertCircle, Loader, X, Clock,
-  Shield, Wrench,
 } from 'lucide-react'
 import AgentNode from '../components/AgentNode'
 import { agentAPI, metricsAPI } from '../services/api'
@@ -25,220 +24,242 @@ const nodeTypes = {
   agentNode: AgentNode,
 }
 
-// ── Auto-layout: 2-row agent grid with tool groups beneath their parent agents ──
-function computeLayout(backendNodes, backendEdges) {
-  const NODE_W = 180
-  const NODE_H_AGENT = 80
-  const X_GAP = 50
-  const Y_GAP = 60
-
-  const Y_SUPERVISOR = 40
-  const Y_ROW1 = 200       // first agent row
-  const Y_ROW2 = 340       // second agent row (staggered)
-  const Y_TOOLS = 500      // tool groups row
-
-  const supervisor = backendNodes.find(n => n.type === 'supervisor')
-  const agents = backendNodes.filter(n => n.type === 'agent')
-  const tools = backendNodes.filter(n => n.type === 'tool_group')
-
-  // Split agents into two balanced rows
-  const COLS = Math.ceil(agents.length / 2)
-  const row1 = agents.slice(0, COLS)
-  const row2 = agents.slice(COLS)
-
-  const canvasW = COLS * (NODE_W + X_GAP) - X_GAP
-
-  const positioned = []
-
-  // Center a row of items horizontally within canvasW
-  const layoutRow = (items, y, type) => {
-    const totalW = items.length * NODE_W + (items.length - 1) * X_GAP
-    const startX = (canvasW - totalW) / 2
-    items.forEach((item, i) => {
-      positioned.push({
-        id: item.id,
-        type: 'agentNode',
-        position: { x: startX + i * (NODE_W + X_GAP), y },
-        data: {
-          label: item.label,
-          description: item.description || '',
-          status: item.status || 'idle',
-          color: item.color || '#6366f1',
-          isInteractive: item.type !== 'tool_group',
-          nodeType: item.type || type,
-          riskTier: item.risk_tier,
-          tools: item.tools || [],
-        },
-      })
-    })
-  }
-
-  // Supervisor centered at top
-  if (supervisor) {
-    positioned.push({
-      id: supervisor.id,
-      type: 'agentNode',
-      position: { x: canvasW / 2 - NODE_W / 2, y: Y_SUPERVISOR },
-      data: {
-        label: supervisor.label,
-        description: supervisor.description || '',
-        status: supervisor.status || 'active',
-        color: supervisor.color || '#8b5cf6',
-        isInteractive: true,
-        nodeType: 'supervisor',
-        riskTier: 'orchestrator',
-        tools: [],
-      },
-    })
-  }
-
-  // Two rows of agents, row2 is half-column offset for a staggered look
-  const row1TotalW = row1.length * NODE_W + (row1.length - 1) * X_GAP
-  const row1StartX = (canvasW - row1TotalW) / 2
-  row1.forEach((item, i) => {
-    positioned.push({
-      id: item.id,
-      type: 'agentNode',
-      position: { x: row1StartX + i * (NODE_W + X_GAP), y: Y_ROW1 },
-      data: {
-        label: item.label,
-        description: item.description || '',
-        status: item.status || 'idle',
-        color: item.color || '#6366f1',
-        isInteractive: true,
-        nodeType: 'agent',
-        riskTier: item.risk_tier,
-        tools: item.tools || [],
-      },
-    })
-  })
-
-  const row2TotalW = row2.length * NODE_W + (row2.length - 1) * X_GAP
-  const row2StartX = (canvasW - row2TotalW) / 2
-  row2.forEach((item, i) => {
-    positioned.push({
-      id: item.id,
-      type: 'agentNode',
-      position: { x: row2StartX + i * (NODE_W + X_GAP), y: Y_ROW2 },
-      data: {
-        label: item.label,
-        description: item.description || '',
-        status: item.status || 'idle',
-        color: item.color || '#6366f1',
-        isInteractive: true,
-        nodeType: 'agent',
-        riskTier: item.risk_tier,
-        tools: item.tools || [],
-      },
-    })
-  })
-
-  // Tool groups: position each beneath its parent agent(s) via edge mapping.
-  // Build agent→tool mapping from edges
-  const agentToTool = {}   // agentId → [toolId, ...]
-  const toolToAgents = {}  // toolId → [agentId, ...]
-  backendEdges.forEach(e => {
-    if (tools.some(t => t.id === e.target)) {
-      if (!agentToTool[e.source]) agentToTool[e.source] = []
-      agentToTool[e.source].push(e.target)
-      if (!toolToAgents[e.target]) toolToAgents[e.target] = []
-      toolToAgents[e.target].push(e.source)
-    }
-  })
-
-  // Position tool groups: average x of parent agents, Y_TOOLS row
-  // Spread tools evenly across canvas to avoid overlap
-  const toolsSorted = [...tools].sort((a, b) => {
-    const aParents = toolToAgents[a.id] || []
-    const bParents = toolToAgents[b.id] || []
-    const aX = aParents.length > 0
-      ? aParents.reduce((sum, pId) => {
-          const pn = positioned.find(n => n.id === pId)
-          return sum + (pn ? pn.position.x : 0)
-        }, 0) / aParents.length
-      : 0
-    const bX = bParents.length > 0
-      ? bParents.reduce((sum, pId) => {
-          const pn = positioned.find(n => n.id === pId)
-          return sum + (pn ? pn.position.x : 0)
-        }, 0) / bParents.length
-      : 0
-    return aX - bX
-  })
-
-  // Two rows of tools if there are many, using smaller spacing
-  const TOOL_W = 140
-  const TOOL_GAP = 30
-  const TOOL_COLS = Math.ceil(toolsSorted.length / 2)
-  const toolRow1 = toolsSorted.slice(0, TOOL_COLS)
-  const toolRow2 = toolsSorted.slice(TOOL_COLS)
-
-  const layoutToolRow = (items, y) => {
-    const totalW = items.length * TOOL_W + (items.length - 1) * TOOL_GAP
-    const startX = (canvasW - totalW) / 2
-    items.forEach((item, i) => {
-      positioned.push({
-        id: item.id,
-        type: 'agentNode',
-        position: { x: startX + i * (TOOL_W + TOOL_GAP), y },
-        data: {
-          label: item.label,
-          description: item.description || '',
-          status: item.status || 'idle',
-          color: item.color || '#6366f1',
-          isInteractive: false,
-          nodeType: 'tool_group',
-          riskTier: item.risk_tier,
-          tools: item.tools || [],
-        },
-      })
-    })
-  }
-
-  layoutToolRow(toolRow1, Y_TOOLS)
-  layoutToolRow(toolRow2, Y_TOOLS + 100)
-
-  // Build edges with ReactFlow styling
-  const styledEdges = backendEdges.map(e => {
-    const isTool = tools.some(t => t.id === e.target)
-    return {
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      type: 'smoothstep',
-      animated: false,
-      style: isTool
-        ? { stroke: '#444', strokeWidth: 1, strokeDasharray: '4 3' }
-        : { stroke: '#6366f1', strokeWidth: 1.5 },
-      markerEnd: { type: MarkerType.ArrowClosed, color: isTool ? '#444' : '#6366f1' },
-    }
-  })
-
-  return { nodes: positioned, edges: styledEdges }
+// Maps flow node IDs to backend agent IDs
+const NODE_TO_AGENT = {
+  health: 'health_agent',
+  backup: 'backup_agent',
+  recovery: 'recovery_agent',
+  sql_tuning: 'sql_tuning_agent',
+  capacity: 'capacity_agent',
+  security: 'security_agent',
+  browser: 'browser_agent',
 }
 
-// Find edges connected to a node
+// Maps node IDs to the tool-layer nodes they connect to
+const NODE_TO_TOOLS = {
+  health: 'hana_tools',
+  backup: 'hana_tools',
+  recovery: 'remote_exec',
+  sql_tuning: 'hana_tools',
+  capacity: 'hana_tools',
+  security: 'remote_exec',
+  browser: 'rag_tools',
+}
+
+// Quick actions per agent
+const QUICK_ACTIONS = {
+  supervisor: [
+    { label: 'Check all agents', prompt: 'Give me a status summary of all agents and system health' },
+    { label: 'Run full diagnostics', prompt: 'Run a full diagnostic check on the HANA system' },
+  ],
+  health: [
+    { label: 'Health check', prompt: 'Run a health check on the HANA system' },
+    { label: 'Check services', prompt: 'Check all HANA service statuses' },
+    { label: 'Memory analysis', prompt: 'Analyze current memory usage on the HANA system' },
+  ],
+  backup: [
+    { label: 'Backup status', prompt: 'Show the current backup status and last successful backup' },
+    { label: 'List backups', prompt: 'List all recent HANA backups with their status' },
+  ],
+  recovery: [
+    { label: 'Recovery readiness', prompt: 'Check disaster recovery readiness and latest recovery points' },
+    { label: 'List snapshots', prompt: 'Show all available snapshots for recovery' },
+  ],
+  sql_tuning: [
+    { label: 'Top queries', prompt: 'Show the top expensive SQL queries currently running' },
+    { label: 'Index suggestions', prompt: 'Suggest index optimizations for the system' },
+  ],
+  capacity: [
+    { label: 'Disk usage', prompt: 'Show current disk usage and capacity forecast' },
+    { label: 'Growth trend', prompt: 'Analyze data growth trend for the last 30 days' },
+  ],
+  security: [
+    { label: 'Security audit', prompt: 'Run a security audit on users and privileges' },
+    { label: 'Check access', prompt: 'Check for overprivileged users or suspicious access patterns' },
+  ],
+  browser: [
+    { label: 'Search SAP notes', prompt: 'Search SAP notes for recent HANA patches and fixes' },
+    { label: 'Find docs', prompt: 'Find SAP documentation for HANA backup and recovery best practices' },
+  ],
+}
+
+// Define the agent architecture
+const initialNodes = [
+  {
+    id: 'supervisor',
+    type: 'agentNode',
+    position: { x: 400, y: 50 },
+    data: { 
+      label: 'Supervisor Agent',
+      description: 'Orchestrates all agents & enforces policy',
+      status: 'active',
+      color: '#8b5cf6',
+      isInteractive: true,
+    },
+  },
+  {
+    id: 'health',
+    type: 'agentNode',
+    position: { x: 100, y: 250 },
+    data: { 
+      label: 'Health Agent',
+      description: 'Monitors system health metrics',
+      status: 'active',
+      color: '#10b981',
+      isInteractive: true,
+    },
+  },
+  {
+    id: 'backup',
+    type: 'agentNode',
+    position: { x: 300, y: 250 },
+    data: { 
+      label: 'Backup Agent',
+      description: 'Manages backup operations',
+      status: 'active',
+      color: '#3b82f6',
+      isInteractive: true,
+    },
+  },
+  {
+    id: 'recovery',
+    type: 'agentNode',
+    position: { x: 500, y: 250 },
+    data: { 
+      label: 'Recovery Agent',
+      description: 'Handles disaster recovery',
+      status: 'active',
+      color: '#f59e0b',
+      isInteractive: true,
+    },
+  },
+  {
+    id: 'sql_tuning',
+    type: 'agentNode',
+    position: { x: 700, y: 250 },
+    data: { 
+      label: 'SQL Tuning Agent',
+      description: 'Optimizes query performance',
+      status: 'active',
+      color: '#06b6d4',
+      isInteractive: true,
+    },
+  },
+  {
+    id: 'capacity',
+    type: 'agentNode',
+    position: { x: 200, y: 450 },
+    data: { 
+      label: 'Capacity Agent',
+      description: 'Manages resource capacity',
+      status: 'active',
+      color: '#ec4899',
+      isInteractive: true,
+    },
+  },
+  {
+    id: 'security',
+    type: 'agentNode',
+    position: { x: 400, y: 450 },
+    data: { 
+      label: 'Security Agent',
+      description: 'Monitors security threats',
+      status: 'active',
+      color: '#ef4444',
+      isInteractive: true,
+    },
+  },
+  {
+    id: 'browser',
+    type: 'agentNode',
+    position: { x: 600, y: 450 },
+    data: { 
+      label: 'Browser Agent',
+      description: 'Searches SAP documentation',
+      status: 'active',
+      color: '#14b8a6',
+      isInteractive: true,
+    },
+  },
+  // Tool nodes
+  {
+    id: 'hana_tools',
+    type: 'agentNode',
+    position: { x: 100, y: 650 },
+    data: { 
+      label: 'HANA Tools',
+      description: 'Direct HANA connection',
+      status: 'idle',
+      color: '#6366f1',
+    },
+  },
+  {
+    id: 'remote_exec',
+    type: 'agentNode',
+    position: { x: 350, y: 650 },
+    data: { 
+      label: 'Remote Exec',
+      description: 'OS-level operations via HTTP',
+      status: 'idle',
+      color: '#6366f1',
+    },
+  },
+  {
+    id: 'rag_tools',
+    type: 'agentNode',
+    position: { x: 600, y: 650 },
+    data: { 
+      label: 'RAG Tools',
+      description: 'Knowledge base queries',
+      status: 'idle',
+      color: '#6366f1',
+    },
+  },
+]
+
+const initialEdges = [
+  // Supervisor connections
+  { id: 'e-sup-health', source: 'supervisor', target: 'health', type: 'smoothstep', animated: false, markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: 'e-sup-backup', source: 'supervisor', target: 'backup', type: 'smoothstep', animated: false, markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: 'e-sup-recovery', source: 'supervisor', target: 'recovery', type: 'smoothstep', animated: false, markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: 'e-sup-sql', source: 'supervisor', target: 'sql_tuning', type: 'smoothstep', animated: false, markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: 'e-sup-capacity', source: 'supervisor', target: 'capacity', type: 'smoothstep', animated: false, markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: 'e-sup-security', source: 'supervisor', target: 'security', type: 'smoothstep', animated: false, markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: 'e-sup-browser', source: 'supervisor', target: 'browser', type: 'smoothstep', animated: false, markerEnd: { type: MarkerType.ArrowClosed } },
+  
+  // Tool connections
+  { id: 'e-health-hana', source: 'health', target: 'hana_tools', type: 'smoothstep', animated: false, style: { stroke: '#555' }, markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: 'e-backup-hana', source: 'backup', target: 'hana_tools', type: 'smoothstep', animated: false, style: { stroke: '#555' }, markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: 'e-recovery-exec', source: 'recovery', target: 'remote_exec', type: 'smoothstep', animated: false, style: { stroke: '#555' }, markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: 'e-sql-hana', source: 'sql_tuning', target: 'hana_tools', type: 'smoothstep', animated: false, style: { stroke: '#555' }, markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: 'e-capacity-hana', source: 'capacity', target: 'hana_tools', type: 'smoothstep', animated: false, style: { stroke: '#555' }, markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: 'e-security-exec', source: 'security', target: 'remote_exec', type: 'smoothstep', animated: false, style: { stroke: '#555' }, markerEnd: { type: MarkerType.ArrowClosed } },
+  { id: 'e-browser-rag', source: 'browser', target: 'rag_tools', type: 'smoothstep', animated: false, style: { stroke: '#555' }, markerEnd: { type: MarkerType.ArrowClosed } },
+]
+
+// Find edges connected to a node (as source or target)
 function getConnectedEdgeIds(nodeId, edgeList) {
   return edgeList.filter(e => e.source === nodeId || e.target === nodeId).map(e => e.id)
 }
 
-// Get the full flow path: supervisor → agent → tool(s)
-function getFlowPath(nodeId, edgeList) {
-  const path = []
-  edgeList.forEach(e => {
-    if (e.source === 'supervisor' && e.target === nodeId) path.push(e.id)
-  })
-  edgeList.forEach(e => {
-    if (e.source === nodeId) path.push(e.id)
-  })
-  return path
+// Get the full path of edges for an agent: supervisor → agent → tool
+function getFlowPath(nodeId) {
+  const edges = []
+  // supervisor → agent edge
+  const supEdge = initialEdges.find(e => e.source === 'supervisor' && e.target === nodeId)
+  if (supEdge) edges.push(supEdge.id)
+  // agent → tool edge
+  const toolTarget = NODE_TO_TOOLS[nodeId]
+  if (toolTarget) {
+    const toolEdge = initialEdges.find(e => e.source === nodeId && e.target === toolTarget)
+    if (toolEdge) edges.push(toolEdge.id)
+  }
+  return edges
 }
 
 export default function AgentFlow() {
-  const [nodes, setNodes, onNodesChange] = useNodesState([])
-  const [edges, setEdges, onEdgesChange] = useEdgesState([])
-  const [quickActions, setQuickActions] = useState({})
-  const [graphLoaded, setGraphLoaded] = useState(false)
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
   const [selectedNode, setSelectedNode] = useState(null)
   const [activeEdges, setActiveEdges] = useState([])
   const [highlightedEdges, setHighlightedEdges] = useState([])
@@ -249,32 +270,6 @@ export default function AgentFlow() {
   const [activityLog, setActivityLog] = useState([])
   const [liveAgentCount, setLiveAgentCount] = useState(0)
   const responseRef = useRef(null)
-  const allEdgesRef = useRef([])
-
-  // Fetch full graph from backend on mount
-  useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      try {
-        const res = await agentAPI.getGraph()
-        if (cancelled) return
-        const data = res.data || {}
-        const { nodes: laid, edges: styledE } = computeLayout(
-          data.nodes || [],
-          data.edges || [],
-        )
-        setNodes(laid)
-        setEdges(styledE)
-        allEdgesRef.current = styledE
-        setQuickActions(data.quick_actions || {})
-        setGraphLoaded(true)
-      } catch {
-        setGraphLoaded(true) // show empty state rather than spinner forever
-      }
-    }
-    load()
-    return () => { cancelled = true }
-  }, [setNodes, setEdges])
 
   // Poll backend for agent statuses
   useEffect(() => {
@@ -286,18 +281,20 @@ export default function AgentFlow() {
         const agentList = res.data.agents || []
         setLiveAgentCount(agentList.filter(a => a.status === 'available').length)
 
+        // Map backend statuses to node statuses
         const statusMap = {}
         agentList.forEach(a => { statusMap[a.id] = a.status })
 
         setNodes(nds => nds.map(n => {
-          const backendStatus = statusMap[n.id]
-          if (!backendStatus) return n
+          const backendId = NODE_TO_AGENT[n.id]
+          if (!backendId) return n
+          const backendStatus = statusMap[backendId]
           const newStatus = backendStatus === 'available' ? 'active'
             : backendStatus === 'unavailable' ? 'error' : n.data.status
           if (newStatus === n.data.status) return n
           return { ...n, data: { ...n.data, status: newStatus } }
         }))
-      } catch { /* backend offline */ }
+      } catch { /* backend offline - keep current state */ }
     }
     poll()
     const id = setInterval(poll, 10000)
@@ -324,34 +321,38 @@ export default function AgentFlow() {
     [setEdges],
   )
 
+  // On node click: select + highlight connected edges
   const onNodeClick = useCallback((event, node) => {
     setSelectedNode(node)
     setAgentResponse(null)
     setMessageInput('')
-    const connected = getConnectedEdgeIds(node.id, allEdgesRef.current)
+    const connected = getConnectedEdgeIds(node.id, initialEdges)
     setHighlightedEdges(connected)
   }, [])
 
+  // Click on background to deselect
   const onPaneClick = useCallback(() => {
     setSelectedNode(null)
     setHighlightedEdges([])
   }, [])
 
+  // Send a message to the chat API, targeting a specific agent
   const sendAgentMessage = useCallback(async (prompt, targetNodeId) => {
     if (isProcessing) return
     setIsProcessing(true)
     setProcessingAgent(targetNodeId)
     setAgentResponse(null)
 
+    // Animate the flow path edges 
     const flowEdges = targetNodeId === 'supervisor'
-      ? allEdgesRef.current.filter(e => e.source === 'supervisor').map(e => e.id)
-      : getFlowPath(targetNodeId, allEdgesRef.current)
+      ? initialEdges.filter(e => e.source === 'supervisor').map(e => e.id)
+      : getFlowPath(targetNodeId)
     setActiveEdges(flowEdges)
 
+    // Set the agent node to "processing" status
     setNodes(nds => nds.map(n => {
-      if (n.id === targetNodeId || n.id === 'supervisor') {
-        return { ...n, data: { ...n.data, status: 'processing' } }
-      }
+      if (n.id === targetNodeId) return { ...n, data: { ...n.data, status: 'processing' } }
+      if (n.id === 'supervisor') return { ...n, data: { ...n.data, status: 'processing' } }
       return n
     }))
 
@@ -360,6 +361,7 @@ export default function AgentFlow() {
       const answer = res.data?.response || res.data?.message || JSON.stringify(res.data)
       setAgentResponse({ type: 'success', text: answer })
 
+      // Add to local activity log
       setActivityLog(prev => [{
         id: Date.now(),
         timestamp: new Date().toISOString(),
@@ -375,6 +377,7 @@ export default function AgentFlow() {
       setIsProcessing(false)
       setProcessingAgent(null)
       setActiveEdges([])
+      // Restore node statuses
       setNodes(nds => nds.map(n => {
         if (n.id === targetNodeId || n.id === 'supervisor') {
           return { ...n, data: { ...n.data, status: 'active' } }
@@ -390,6 +393,7 @@ export default function AgentFlow() {
     setMessageInput('')
   }
 
+  // Compute edge styles: activeEdges (animated glow) > highlightedEdges (bright) > default (dim)
   const styledEdges = edges.map(edge => {
     const isActive = activeEdges.includes(edge.id)
     const isHighlighted = highlightedEdges.includes(edge.id)
@@ -407,18 +411,6 @@ export default function AgentFlow() {
     }
   })
 
-  // Get quick actions for the selected node
-  const nodeQuickActions = selectedNode ? (quickActions[selectedNode.id] || []) : []
-
-  // Risk tier badge color
-  const riskColor = (tier) => {
-    if (tier === 'low') return 'text-green-400 bg-green-400/10 border-green-400/30'
-    if (tier === 'high') return 'text-red-400 bg-red-400/10 border-red-400/30'
-    if (tier === 'orchestrator') return 'text-purple-400 bg-purple-400/10 border-purple-400/30'
-    if (tier === 'tool') return 'text-indigo-400 bg-indigo-400/10 border-indigo-400/30'
-    return 'text-yellow-400 bg-yellow-400/10 border-yellow-400/30'
-  }
-
   return (
     <div className="h-screen flex">
       {/* Flow Canvas */}
@@ -430,11 +422,12 @@ export default function AgentFlow() {
         >
           <motion.div
             animate={{ 
-              scale: [1, 1.08, 1],
+              scale: [1, 1.1, 1],
+              rotate: [0, 180, 360]
             }}
-            transition={{ duration: 2, repeat: Infinity }}
+            transition={{ duration: 3, repeat: Infinity }}
           >
-            <Zap className="w-5 h-5 text-yellow-400 mr-3" />
+            <Zap className="w-6 h-6 text-yellow-400 mr-3" />
           </motion.div>
           <div>
             <h2 className="text-xl font-semibold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
@@ -458,10 +451,6 @@ export default function AgentFlow() {
               <span className="text-sm text-gray-300">{liveAgentCount || nodes.filter(n => n.data.status === 'active').length} Agents</span>
             </div>
             <div className="flex items-center space-x-2">
-              <Wrench className="w-4 h-4 text-indigo-400" />
-              <span className="text-sm text-gray-300">{nodes.filter(n => n.data.nodeType === 'tool_group').length} Tools</span>
-            </div>
-            <div className="flex items-center space-x-2">
               <motion.span 
                 className="w-3 h-3 bg-green-500 rounded-full"
                 animate={{ scale: [1, 1.3, 1] }}
@@ -473,37 +462,24 @@ export default function AgentFlow() {
         </motion.div>
         
         <div className="h-[calc(100vh-4rem)]">
-          {!graphLoaded ? (
-            <div className="flex items-center justify-center h-full">
-              <Loader className="w-8 h-8 text-blue-400 animate-spin" />
-              <span className="ml-3 text-gray-400">Loading agent graph...</span>
-            </div>
-          ) : (
-            <ReactFlow
-              nodes={nodes}
-              edges={styledEdges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onConnect={onConnect}
-              onNodeClick={onNodeClick}
-              onPaneClick={onPaneClick}
-              nodeTypes={nodeTypes}
-              fitView
-              fitViewOptions={{ padding: 0.15, maxZoom: 1.2 }}
-              minZoom={0.3}
-              maxZoom={2}
-              defaultEdgeOptions={{ type: 'smoothstep' }}
-              proOptions={{ hideAttribution: true }}
-            >
-              <Controls className="!bg-gray-800 !border-gray-700 !shadow-lg" />
-              <MiniMap 
-                nodeColor={(node) => node.data.color || '#666'}
-                maskColor="rgba(0, 0, 0, 0.7)"
-                style={{ background: '#111827' }}
-              />
-              <Background variant="dots" gap={20} size={1} color="#334155" />
-            </ReactFlow>
-          )}
+          <ReactFlow
+            nodes={nodes}
+            edges={styledEdges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onNodeClick={onNodeClick}
+            onPaneClick={onPaneClick}
+            nodeTypes={nodeTypes}
+            fitView
+          >
+            <Controls />
+            <MiniMap 
+              nodeColor={(node) => node.data.color || '#666'}
+              maskColor="rgba(0, 0, 0, 0.6)"
+            />
+            <Background variant="dots" gap={12} size={1} color="#3b82f6" />
+          </ReactFlow>
         </div>
       </div>
 
@@ -543,7 +519,7 @@ export default function AgentFlow() {
                   <X className="w-4 h-4" />
                 </motion.button>
               </div>
-              <div className="flex items-center gap-3 mt-3">
+              <div className="flex items-center gap-4 mt-3">
                 <div className="flex items-center gap-1.5">
                   <motion.span 
                     animate={selectedNode.data.status === 'processing' ? { scale: [1, 1.4, 1] } : { scale: [1, 1.2, 1] }}
@@ -557,26 +533,20 @@ export default function AgentFlow() {
                   />
                   <span className="text-xs text-gray-300 capitalize">{selectedNode.data.status}</span>
                 </div>
-                {selectedNode.data.riskTier && (
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium uppercase ${riskColor(selectedNode.data.riskTier)}`}>
-                    <Shield className="w-2.5 h-2.5 inline mr-0.5 -mt-0.5" />
-                    {selectedNode.data.riskTier === 'orchestrator' ? 'orchestrator' : `${selectedNode.data.riskTier} risk`}
-                  </span>
-                )}
-                <span className="text-xs text-gray-500 font-mono ml-auto">{selectedNode.id}</span>
+                <span className="text-xs text-gray-500 font-mono">{selectedNode.id}</span>
               </div>
             </div>
 
             {/* Scrollable content */}
             <div className="flex-1 overflow-y-auto p-5 space-y-5">
-              {/* Quick Actions (from backend) */}
-              {nodeQuickActions.length > 0 && (
+              {/* Quick Actions */}
+              {QUICK_ACTIONS[selectedNode.id] && (
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
                   <label className="text-xs text-gray-500 uppercase font-medium flex items-center gap-1.5">
                     <Play className="w-3 h-3" /> Quick Actions
                   </label>
                   <div className="mt-2 grid grid-cols-1 gap-1.5">
-                    {nodeQuickActions.map((action, idx) => (
+                    {QUICK_ACTIONS[selectedNode.id].map((action, idx) => (
                       <motion.button
                         key={idx}
                         initial={{ x: -20, opacity: 0 }}
@@ -652,58 +622,26 @@ export default function AgentFlow() {
                 )}
               </AnimatePresence>
 
-              {/* Tools (from graph data) */}
-              {selectedNode.data.tools && selectedNode.data.tools.length > 0 && (
-                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
-                  <label className="text-xs text-gray-500 uppercase font-medium flex items-center gap-1.5">
-                    <Wrench className="w-3 h-3" /> {selectedNode.data.nodeType === 'tool_group' ? 'Functions' : 'Tools'}
-                  </label>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {selectedNode.data.tools.map((tool, idx) => (
-                      <motion.span
-                        key={idx}
-                        initial={{ scale: 0 }}
-                        animate={{ scale: 1 }}
-                        transition={{ delay: 0.25 + idx * 0.03 }}
-                        className="text-[11px] px-2 py-1 rounded-md bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 font-mono"
-                      >
-                        {tool}
-                      </motion.span>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-
-              {/* Connected tools (for agent nodes) */}
-              {selectedNode.data.nodeType === 'agent' && (() => {
-                const connectedToolIds = allEdgesRef.current
-                  .filter(e => e.source === selectedNode.id)
-                  .map(e => e.target)
-                const toolNodes = nodes.filter(n => connectedToolIds.includes(n.id))
-                if (toolNodes.length === 0) return null
-                return (
-                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }}>
-                    <label className="text-xs text-gray-500 uppercase font-medium flex items-center gap-1.5">
-                      <Terminal className="w-3 h-3" /> Connected Tool Groups
-                    </label>
-                    <div className="mt-2 space-y-1.5">
-                      {toolNodes.map((tn, idx) => (
-                        <motion.div
-                          key={tn.id}
-                          initial={{ x: -15, opacity: 0 }}
-                          animate={{ x: 0, opacity: 1 }}
-                          transition={{ delay: 0.3 + idx * 0.05 }}
-                          className="flex items-center gap-2 text-xs p-2 rounded-lg bg-gray-700/20 border border-gray-700"
-                        >
-                          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: tn.data.color }} />
-                          <span className="text-gray-300 font-medium">{tn.data.label}</span>
-                          <span className="text-gray-500 ml-auto">{tn.data.description}</span>
-                        </motion.div>
-                      ))}
-                    </div>
-                  </motion.div>
-                )
-              })()}
+              {/* Capabilities */}
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
+                <label className="text-xs text-gray-500 uppercase font-medium flex items-center gap-1.5">
+                  <Terminal className="w-3 h-3" /> Capabilities
+                </label>
+                <div className="mt-2 space-y-1">
+                  {getCapabilities(selectedNode.id).map((cap, idx) => (
+                    <motion.div 
+                      key={idx}
+                      initial={{ x: -20, opacity: 0 }}
+                      animate={{ x: 0, opacity: 1 }}
+                      transition={{ delay: 0.25 + idx * 0.04 }}
+                      className="text-xs text-gray-400 flex items-center gap-2 p-1.5"
+                    >
+                      <CheckCircle className="w-3 h-3 text-green-500/60 flex-shrink-0" />
+                      {cap}
+                    </motion.div>
+                  ))}
+                </div>
+              </motion.div>
 
               {/* Activity Log */}
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
@@ -755,6 +693,78 @@ export default function AgentFlow() {
       </AnimatePresence>
     </div>
   )
+}
+
+function getCapabilities(nodeId) {
+  const capabilities = {
+    supervisor: [
+      'Policy enforcement',
+      'Agent orchestration',
+      'Risk budget management',
+      'Action approval workflow'
+    ],
+    health: [
+      'System health monitoring',
+      'Service status checks',
+      'Alert detection',
+      'Performance metrics'
+    ],
+    backup: [
+      'Backup scheduling',
+      'Backup verification',
+      'Recovery point tracking',
+      'Storage management'
+    ],
+    recovery: [
+      'Disaster recovery planning',
+      'System restoration',
+      'Failover management',
+      'Data recovery'
+    ],
+    sql_tuning: [
+      'Query performance analysis',
+      'Index recommendations',
+      'Execution plan optimization',
+      'Statistics updates'
+    ],
+    capacity: [
+      'Resource utilization tracking',
+      'Capacity forecasting',
+      'Growth trend analysis',
+      'Scaling recommendations'
+    ],
+    security: [
+      'Security audit',
+      'Access control monitoring',
+      'Threat detection',
+      'Compliance checks'
+    ],
+    browser: [
+      'SAP note search',
+      'Documentation lookup',
+      'KB article retrieval',
+      'Solution recommendations'
+    ],
+    hana_tools: [
+      'SQL query execution',
+      'System view access',
+      'Configuration management',
+      'Direct HANA connection'
+    ],
+    remote_exec: [
+      'OS command execution',
+      'File system access',
+      'Process management',
+      'System configuration'
+    ],
+    rag_tools: [
+      'Vector search',
+      'Semantic retrieval',
+      'Knowledge base queries',
+      'Context-aware responses'
+    ]
+  }
+  return capabilities[nodeId] || []
 }
 
 function ActivityItem({ time, action, status }) {

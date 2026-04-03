@@ -297,17 +297,7 @@ export default function Monitoring() {
         <h3 className="font-serif text-lg font-semibold text-foreground mb-6">Top Resource-Consuming Queries</h3>
         <div className="space-y-3">
           {topQueries.length > 0 ? topQueries.map((query) => (
-            <div key={query.id} className="p-4 bg-muted/50 hover:bg-muted rounded-lg transition-colors border border-transparent hover:border-border">
-              <div className="flex items-start justify-between">
-                <div className="flex-1 mr-4">
-                  <code className="text-sm text-accent font-mono">{query.query}</code>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <div className="font-serif text-lg font-semibold text-foreground">{query.duration}s</div>
-                  <div className="text-xs text-muted-foreground">{query.calls} MB</div>
-                </div>
-              </div>
-            </div>
+            <QueryRow key={query.id} query={query} />
           )) : (
             <div className="py-8 text-center text-sm text-muted-foreground">No query data available</div>
           )}
@@ -424,3 +414,25 @@ function MetricCard({ title, value, icon: Icon, color, status }) {
     </div>
   )
 }
+
+function QueryRow({ query }) {
+  const durationColor = query.duration > 10 ? 'text-danger-500' : query.duration > 5 ? 'text-warning-500' : 'text-foreground'
+  return (
+    <div className="flex items-start gap-4 p-4 rounded-lg bg-muted/50 hover:bg-muted transition-colors duration-200 border border-transparent hover:border-border">
+      <div className="flex-shrink-0 p-2 rounded-lg bg-card border border-border shadow-soft">
+        <Database className="w-4 h-4 text-muted-foreground" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-mono text-foreground truncate" title={query.query}>
+          {query.query}
+        </p>
+        <div className="flex items-center gap-4 mt-1 text-xs text-muted-foreground">
+          <span className={`font-medium ${durationColor}`}>{query.duration}s</span>
+          {query.memory_mb != null && <span>{query.memory_mb} MB</span>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+

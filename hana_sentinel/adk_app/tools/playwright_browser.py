@@ -124,34 +124,42 @@ class PlaywrightBrowser:
         await self.close()
 
     async def start(self):
-        """Start the browser."""
+        """Start the browser using real Chrome with persistent profile."""
         if not PLAYWRIGHT_AVAILABLE:
             raise RuntimeError("Playwright not installed. Run: pip install playwright && playwright install chromium")
 
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
+
+        # Use real Chrome install with a dedicated persistent profile for cookies/sessions
+        user_data_dir = os.path.join(os.path.expanduser("~"), ".hana_sentinel_browser")
+        os.makedirs(user_data_dir, exist_ok=True)
+
+        self._context = await self._playwright.chromium.launch_persistent_context(
+            user_data_dir=user_data_dir,
+            channel="chrome",
             headless=self.headless,
+            viewport={"width": self.viewport_width, "height": self.viewport_height},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-dev-shm-usage",
                 "--no-sandbox",
-            ]
+            ],
         )
-        self._context = await self._browser.new_context(
-            viewport={"width": self.viewport_width, "height": self.viewport_height},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        )
-        self._page = await self._context.new_page()
-        logger.info("Playwright browser started")
+        self._browser = None  # persistent context doesn't use separate browser object
+        self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+
+        # Hide automation indicators
+        await self._page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            window.chrome = { runtime: {} };
+        """)
+        logger.info("Playwright browser started (Chrome persistent profile)")
 
     async def close(self):
         """Close the browser."""
-        if self._page:
-            await self._page.close()
         if self._context:
             await self._context.close()
-        if self._browser:
-            await self._browser.close()
         if self._playwright:
             await self._playwright.stop()
         logger.info("Playwright browser closed")
@@ -367,6 +375,36 @@ class PlaywrightBrowser:
             await self._emit_action(action)
             return action
 
+    async def move_cursor_to(self, selector: str, description: str = "") -> BrowserAction:
+        """Move cursor to an element without clicking — shows hover."""
+        if not self._page:
+            raise RuntimeError("Browser not started")
+
+        try:
+            element = await self._page.query_selector(selector)
+            if element:
+                box = await element.bounding_box()
+                if box:
+                    self._cursor_x = int(box["x"] + box["width"] / 2)
+                    self._cursor_y = int(box["y"] + box["height"] / 2)
+
+            action = await self._create_action(
+                "hover",
+                selector,
+                description or f"Moving cursor to {selector}",
+            )
+            return action
+        except Exception as e:
+            action = BrowserAction(
+                action_type="hover",
+                target=selector,
+                description=description or f"Hover failed: {selector}",
+                success=False,
+                error=str(e),
+            )
+            await self._emit_action(action)
+            return action
+
     async def type_text(self, selector: str, text: str, description: str = "") -> BrowserAction:
         """Type text into an input."""
         if not self._page:
@@ -384,6 +422,11 @@ class PlaywrightBrowser:
                     element_type="input",
                     is_target=True,
                 )
+                # Update cursor position to the input element (like click does)
+                box = await element.bounding_box()
+                if box:
+                    self._cursor_x = int(box["x"] + box["width"] / 2)
+                    self._cursor_y = int(box["y"] + box["height"] / 2)
 
             await self._page.fill(selector, text)
             await asyncio.sleep(0.2)
@@ -607,17 +650,11 @@ class WebSearchAgent:
             on_action=self.on_action,
         ) as browser:
             try:
-                # Step 1: Navigate to search engine
+                # Step 1: Navigate to Bing search
                 self.session.status = "browsing"
-                search_url = f"https://www.google.com/search?q={quote_plus(query)}"
+                search_url = f"https://www.bing.com/search?q={quote_plus(query)}"
                 action = await browser.navigate(search_url)
                 self.session.actions.append(action)
-
-                if not action.success:
-                    # Fallback to DuckDuckGo
-                    search_url = f"https://duckduckgo.com/?q={quote_plus(query)}"
-                    action = await browser.navigate(search_url)
-                    self.session.actions.append(action)
 
                 await asyncio.sleep(1)
 
@@ -626,52 +663,109 @@ class WebSearchAgent:
                 self.session.actions.append(action)
                 search_results_text = action.extracted_text or ""
 
-                # Step 3: Try to find and visit relevant links
+                # Step 3: Extract result links from search page
                 self.session.status = "extracting"
                 visited_urls = set()
                 extracted_contents = []
 
-                # Common SAP help domains to prioritize
+                # SAP domains to prioritize (visit first if found)
                 priority_domains = [
-                    "help.sap.com",
-                    "me.sap.com",
-                    "community.sap.com",
-                    "support.sap.com",
+                    "help.sap.com", "me.sap.com",
+                    "community.sap.com", "support.sap.com",
                 ]
 
-                # Try to click on search results
-                for i, domain in enumerate(priority_domains[:max_pages]):
+                # Parse search result links from Bing
+                result_links = await browser._page.evaluate("""
+                    () => {
+                        const links = [];
+                        // Bing: organic result links (li.b_algo h2 a)
+                        document.querySelectorAll('li.b_algo h2 a, .b_algo .b_title a, #b_results .b_algo a[href]').forEach(a => {
+                            const href = a.href;
+                            if (href && href.startsWith('http') && !href.includes('bing.com') && !href.includes('microsoft.com/bing')) {
+                                const title = a.innerText?.substring(0, 80) || '';
+                                if (title.trim()) links.push({ url: href, title: title.trim() });
+                            }
+                        });
+                        // Broader fallback: any result link on the page
+                        if (links.length === 0) {
+                            document.querySelectorAll('#b_results a[href]').forEach(a => {
+                                const href = a.href;
+                                if (href && href.startsWith('http') && !href.includes('bing.com')
+                                    && !href.includes('microsoft.com') && !href.includes('javascript:')) {
+                                    const title = a.innerText?.substring(0, 80) || '';
+                                    if (title.trim() && title.length > 5) links.push({ url: href, title: title.trim() });
+                                }
+                            });
+                        }
+                        // Deduplicate by hostname+pathname
+                        const seen = new Set();
+                        return links.filter(l => {
+                            try {
+                                const key = new URL(l.url).hostname + new URL(l.url).pathname;
+                                if (seen.has(key)) return false;
+                                seen.add(key);
+                                return true;
+                            } catch { return false; }
+                        }).slice(0, 10);
+                    }
+                """)
+
+                # Sort: SAP domains first, then others
+                def link_priority(link):
+                    for i, domain in enumerate(priority_domains):
+                        if domain in link.get("url", ""):
+                            return i
+                    return len(priority_domains)
+
+                result_links.sort(key=link_priority)
+
+                # Visit top N result links
+                for link_info in result_links[:max_pages]:
+                    link_url = link_info.get("url", "")
+                    link_title = link_info.get("title", "")
+                    if link_url in visited_urls:
+                        continue
                     try:
-                        # Look for link containing domain
-                        action = await browser.find_and_click_link(domain)
+                        # Navigate to the result page
+                        action = await browser.navigate(link_url)
                         self.session.actions.append(action)
 
-                        if action.success and browser._page.url not in visited_urls:
-                            visited_urls.add(browser._page.url)
+                        if action.success:
+                            visited_urls.add(link_url)
                             await asyncio.sleep(1)
 
+                            # Scroll down to load more content
+                            scroll_action = await browser.scroll("down", 400)
+                            self.session.actions.append(scroll_action)
+                            await asyncio.sleep(0.3)
+
                             # Extract content
-                            extract_action = await browser.extract_text("main, article, .content, #content")
+                            extract_action = await browser.extract_text("main, article, .content, #content, body")
                             self.session.actions.append(extract_action)
 
                             if extract_action.extracted_text:
                                 extracted_contents.append({
                                     "url": browser._page.url,
-                                    "title": action.page_title,
+                                    "title": link_title or action.page_title,
                                     "content": extract_action.extracted_text[:3000],
                                 })
                                 self.session.sources.append({
                                     "url": browser._page.url,
-                                    "title": action.page_title,
+                                    "title": link_title or action.page_title,
                                     "status": "ok",
                                 })
 
                             # Go back to search results
-                            await browser.navigate(search_url)
-                            self.session.actions.append(action)
+                            back_action = await browser.navigate(search_url)
+                            self.session.actions.append(back_action)
 
                     except Exception as e:
-                        logger.warning(f"Failed to visit {domain}: {e}")
+                        logger.warning(f"Failed to visit {link_url}: {e}")
+                        # Try to get back to search results
+                        try:
+                            await browser.navigate(search_url)
+                        except Exception:
+                            pass
                         continue
 
                 # Compile final result

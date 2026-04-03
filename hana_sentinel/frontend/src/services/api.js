@@ -9,29 +9,7 @@ const api = axios.create({
   },
 });
 
-// Incidents
-export const incidentsAPI = {
-  create: (data) => api.post('/incidents', data),
-  get: (id) => api.get(`/incidents/${id}`),
-  list: () => api.get('/incidents'),
-  getTimeline: (id) => api.get(`/incidents/${id}/timeline`),
-};
-
-// Remediations
-export const remediationsAPI = {
-  propose: (incidentId, data) => api.post(`/incidents/${incidentId}/remediation`, data),
-  approve: (certId, data) => api.post(`/remediations/${certId}/approve`, data),
-  execute: (certId) => api.post(`/remediations/${certId}/execute`),
-  rollback: (certId) => api.post(`/remediations/${certId}/rollback`),
-};
-
-// Risk Budget
-export const riskBudgetAPI = {
-  get: (systemId) => api.get(`/risk-budgets/${systemId}`),
-  getTransactions: (systemId) => api.get(`/risk-budgets/${systemId}/transactions`),
-};
-
-// Tools
+// Agent Chat
 export const toolsAPI = {
   queryHANA: (sql) => api.post('/tools/hana-query', { sql }),
   checkConnection: () => api.get('/tools/hana-connection'),
@@ -45,6 +23,8 @@ export const agentAPI = {
     api.post('/agent/chat', { message, conversation_id: conversationId, ...options }),
   getConversation: (conversationId) => api.get(`/agent/conversation/${conversationId}`),
   browse: (query) => api.post('/agent/browse', { query }),
+  getGraph: () => api.get('/agents/graph'),
+  list: () => api.get('/agents'),
 };
 
 // Metrics and Monitoring
@@ -52,6 +32,7 @@ export const metricsAPI = {
   getRealtime: () => api.get('/metrics/realtime'),
   forceReconnect: () => api.post('/force-reconnect'),
   forceReconnectStatus: () => api.get('/force-reconnect'),
+  autoReconnect: () => api.get('/force-reconnect/auto'),
   getHistory: (hours = 24) => api.get(`/metrics/history?hours=${hours}`),
   getActivities: (limit = 20) => api.get(`/activities/recent?limit=${limit}`),
   getHealth: () => api.get('/health'),
@@ -77,12 +58,14 @@ export const instanceAPI = {
     api.get('/instance/snapshots'),
 
   // Healing
+  getPendingApprovals: () =>
+    api.get('/instance/healing/pending'),
   proposeHealing: (diagnosticId, issueType) =>
     api.post('/instance/healing/propose', { diagnostic_id: diagnosticId, issue_type: issueType }),
   approveHealing: (certificateId, approvedBy, notes) =>
     api.post(`/instance/healing/${certificateId}/approve`, { approved_by: approvedBy, notes }),
   rejectHealing: (certificateId, rejectedBy, reason) =>
-    api.post(`/instance/healing/${certificateId}/reject`, { rejected_by: rejectedBy, reason }),
+    api.post(`/instance/healing/${certificateId}/reject`, { approved_by: rejectedBy, notes: reason }),
   executeHealing: (certificateId) =>
     api.post(`/instance/healing/${certificateId}/execute`),
 

@@ -44,8 +44,8 @@ env_variables:
   # Config
   SAP_SUPPORT_URL: "https://me.sap.com/notes"
   BROWSER_ALLOWED_DOMAINS: "support.sap.com,me.sap.com,launchpad.support.sap.com"
-  BROWSER_MODEL: "gemini-2.0-flash"
-  ADK_MODEL: "gemini-2.0-flash"
+  BROWSER_MODEL: "anthropic--claude-4.6-sonnet"
+  ADK_MODEL: "openai/gpt-4o"
   
   # RAG
   RAG_CORPUS_NAME: "sap-hana-kb"

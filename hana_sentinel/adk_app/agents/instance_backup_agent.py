@@ -83,8 +83,6 @@ Status: {result.get('status', 'unknown').upper()}
                 output += f"  ✗ {error.get('disk_name', 'Unknown')}: {error.get('error_message', 'Unknown error')}\n"
             output += "\n"
 
-        output += f"\nRisk Budget Cost: 3 points (snapshot creation)\n"
-
         return output
 
     except Exception as e:
@@ -236,11 +234,6 @@ SNAPSHOT NAMING:
 Format: {instance_name}-{disk_name}-{YYYYMMDD-HHMMSS}
 Example: vlgdbzo3-boot-disk-20260304-103000
 
-RISK BUDGET:
-- Snapshot creation: 3 points (MEDIUM risk)
-- Snapshot listing: 0 points (read-only)
-- Status check: 0 points (read-only)
-
 SAFETY RULES (CRITICAL):
 - Only create ONE snapshot per day per disk
 - Check for existing snapshots before creating
@@ -277,7 +270,7 @@ COMMUNICATION STYLE:
 INTEGRATION WITH OTHER AGENTS:
 - Monitor agent: Provides system health before snapshot
 - Healing agent: May trigger snapshot before risky operations
-- Root supervisor: Reports backup status for governance
+- Root supervisor: Reports backup status
 
 Remember: Snapshots are your safety net. Be reliable, be consistent, never delete without permission.
 """

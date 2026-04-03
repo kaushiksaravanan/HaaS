@@ -14,13 +14,26 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Project root: two levels up from this file (adk_app/tools/rag_tools.py → project root)
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+
+def _resolve_kb_dir() -> str:
+    """Resolve RAG_LOCAL_KB_DIR, supporting both absolute and relative paths."""
+    kb_dir = os.getenv("RAG_LOCAL_KB_DIR", "")
+    if not kb_dir:
+        return ""
+    if not os.path.isabs(kb_dir):
+        kb_dir = os.path.join(_PROJECT_ROOT, kb_dir)
+    return kb_dir
+
 
 def _search_local_knowledge_base(question: str) -> dict:
     """Search local document store for SAP knowledge.
     Searches .txt, .md, .csv files in the configured knowledge base directory.
     This is NOT mock data — it searches real local files.
     """
-    kb_dir = os.getenv("RAG_LOCAL_KB_DIR", "")
+    kb_dir = _resolve_kb_dir()
     if not kb_dir or not os.path.isdir(kb_dir):
         return {
             "status": "error",
@@ -71,13 +84,15 @@ def _search_local_knowledge_base(question: str) -> dict:
         matches.sort(key=lambda x: x["score"], reverse=True)
         top = matches[:5]
 
-        combined = "\n\n---\n\n".join(f"[{m['file']}]\n{m['snippet']}" for m in top)
+        combined = "\n\n---\n\n".join(
+            f"**{os.path.basename(m['file'])}**\n{m['snippet']}" for m in top
+        )
 
         return {
             "status": "success",
             "source": "local_kb",
             "answer": combined,
-            "sources": [m["file"] for m in top],
+            "sources": [os.path.basename(m["file"]) for m in top],
             "confidence": min(0.7, top[0]["score"] / 10),
             "matches_found": len(matches),
         }
@@ -121,7 +136,7 @@ def rag_ingest(document_path: str, document_type: str = "sap_note") -> dict:
     Returns:
         dict: status of the ingestion operation.
     """
-    kb_dir = os.getenv("RAG_LOCAL_KB_DIR", "")
+    kb_dir = _resolve_kb_dir()
     if not kb_dir:
         return {
             "status": "error",

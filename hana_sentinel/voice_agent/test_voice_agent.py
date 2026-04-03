@@ -18,6 +18,7 @@ from voice_agent.agent import (
     SentinelLLMStream,
     _call_sentinel_chat,
     _strip_markdown_for_speech,
+    SENTINEL_API_URL,
 )
 from livekit.agents.llm import ChatContext, ChatChunk, ChatMessage
 
@@ -34,7 +35,7 @@ class TestMarkdownStripping(unittest.TestCase):
         text = "Here is the output:\n```\nroot      1234  0.0  0.1\n```\nDone."
         result = _strip_markdown_for_speech(text)
         self.assertNotIn("```", result)
-        self.assertIn("code output omitted", result)
+        self.assertNotIn("root", result)  # code block content should be gone
 
     def test_inline_code_cleaned(self):
         text = "Run `df -h` to check disk."
@@ -74,7 +75,8 @@ class TestMarkdownStripping(unittest.TestCase):
         result = _strip_markdown_for_speech(text)
         self.assertNotIn("```", result)
         self.assertNotIn("**", result)
-        self.assertIn("Command:", result)
+        # "Command:" label is stripped by _strip_markdown_for_speech
+        self.assertIn("uptime", result)
 
 
 class TestSentinelChatCaller(unittest.TestCase):
@@ -178,8 +180,9 @@ class TestSentinelLLMStream(unittest.TestCase):
                 chunks.append(chunk)
 
             self.assertTrue(len(chunks) > 0, "Should emit at least one chunk")
-            self.assertIsInstance(chunks[0], ChatChunk)
-            self.assertEqual(chunks[0].delta.content, "Disk usage is at 45%.")
+            # First chunk is a filler phrase (e.g. "On it. "), actual content follows
+            all_content = "".join(c.delta.content or "" for c in chunks)
+            self.assertIn("Disk usage is at 45 percent", all_content)
             self.assertEqual(chunks[0].delta.role, "assistant")
 
         _run(_test())
@@ -223,10 +226,10 @@ class TestSentinelLLMStream(unittest.TestCase):
             async for chunk in stream:
                 chunks.append(chunk)
 
-            content = chunks[0].delta.content
-            self.assertNotIn("```", content)
-            self.assertNotIn("**", content)
-            self.assertIn("Status:", content)
+            all_content = "".join(c.delta.content or "" for c in chunks)
+            self.assertNotIn("```", all_content)
+            self.assertNotIn("**", all_content)
+            self.assertIn("Status", all_content)
 
         _run(_test())
 
@@ -277,6 +280,4 @@ class TestSentinelAPIIntegration(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    # Set the Sentinel API URL from env for integration tests
-    SENTINEL_API_URL = os.getenv("SENTINEL_API_URL", "http://localhost:8000")
     unittest.main(verbosity=2)
