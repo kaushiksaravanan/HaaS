@@ -1,0 +1,31 @@
+================================================================================
+HANA INSTANCE HEALING EXECUTION LOG
+================================================================================
+Script: auto_db_eligibility
+Status: PARTIAL
+Risk Level: MEDIUM
+Start Time: 2026-04-09T12:18:15.174247
+Completion Time: 2026-04-09T12:18:18.566385
+================================================================================
+
+EXECUTION STEPS:
+────────────────────────────────────────────────────────────────────────────────
+1. Validating backup configuration
+2. Validating archive directories
+3. Archive directory created
+4. Validating system database configuration
+5. Checking backup catalog
+
+FIXES APPLIED:
+────────────────────────────────────────────────────────────────────────────────
+  ✓ archive_dir_created
+
+FAILURES:
+────────────────────────────────────────────────────────────────────────────────
+  ✗ backup_config: Failed to query backup configuration
+  ✗ systemdb_config: Failed to query system database
+
+================================================================================
+Healing log completed: 2026-04-09T12:18:18.578385
+Log file: C:\Users\I587436\Downloads\HanaS\hana_sentinel\logs\instance\healing_auto_db_eligibility_20260409_121818.log
+================================================================================

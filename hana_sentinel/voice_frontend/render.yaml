@@ -1,0 +1,17 @@
+# HANA Sentinel Voice Frontend — Render.com
+# https://render.com/docs/deploy-nextjs
+services:
+  - type: web
+    name: hana-sentinel-voice
+    runtime: node
+    buildCommand: npm install && npm run build && cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public 2>/dev/null; true
+    startCommand: node .next/standalone/server.js
+    envVars:
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: PORT
+        value: 3000
